@@ -39,6 +39,7 @@ class MyModule(icetray.I3ConditionalModule):
         muons = [[d for d in p if(d.type == d.MuPlus or d.type == d.MuMinus)] for p in daughters] #Select only daughters that are muons
         highEMuons = [max(p, key=self.get_energy) if len(p) > 0 else None for p in muons] #Choose only the highest energy muon
         highEMuons = [(m if abs(m.pos) < 500 else None) if m != None else None for m in highEMuons] #Choose only muons that start within 500m of the detector center
+        highEMuons = [(m if m.energy >= 5000 else None) if m != None else None for m in highEMuons] #Choose only muons that are at least 5TeV
         losses = [[d for d in Tree.get_daughters(m) if d.type in self.loss_set] if m != None else None for m in highEMuons] #Get the muon daughters
         #print(len([m for m in highEMuons if m != None]))
 
@@ -71,6 +72,11 @@ tray.Add(tableio.I3TableWriter,'hdf1',
          SubEventStreams = ['InIce', 'InIceSplit'],
          keys = ['HighEMuonLosses']
         )
+
+#tray.Add("Dump")
+
+#tray.Add("I3Writer", DropOrphanStreams=[icetray.I3Frame.DAQ], filename="outfile.i3.bz2")
+
 
 tray.Execute()
 tray.Finish()
