@@ -1,12 +1,12 @@
 import tables
 import itertools
 import numpy as np
+import matplotlib.pyplot as plt
 from icecube import dataclasses
 
 file = tables.openFile('out.h5')
 
 max_distance = 600.
-min_energy = 5000.
 
 coldict = {}
 colnames = file.root.HighEMuonLosses.colnames
@@ -23,18 +23,18 @@ skip_muon = False
 fractional_losses = []
 distances = []
 losses = []
-init_loss_pos = np.arange(3)
+init_muon_pos = np.arange(3)
 is_first = True
 
 for col in file.root.HighEMuonLosses.cols:
     if col[iv] == 0: #Is a muon
-        skip_muon = col[ie] < min_energy # 5TeV cut
-        last_tot_loss = sum(losses)
+        init_muon_pos = np.array([col[ix], col[iy], col[iz]])
     else: #Is a loss
         if skip_muon:
             continue
         pos = np.array([col[ix], col[iy], col[iz]])
         if(col[iv] == 1 ):
+            last_tot_loss = sum(losses)
             if last_tot_loss > 0:
                 last_frac_losses = np.array(losses) / last_tot_loss
                 fractional_losses.append((last_frac_losses, distances))
@@ -45,14 +45,17 @@ for col in file.root.HighEMuonLosses.cols:
                     print "Encountered lossless muon!"
             distances = []
             losses = []
-            init_loss_pos = pos
-        distance = np.linalg.norm(pos - init_loss_pos)
+        distance = np.linalg.norm(pos - init_muon_pos)
         loss = col[ie]
-        if(distance <= max_distance):
+        if(distance < max_distance):
             distances.append(distance)
             losses.append(loss)
 
-bin_it = np.linspace(0, 600, 600./20.)
-hists = [np.array([sum([loss for loss,dist in itertools.izip(frac_loss[0], frac_loss[1]) if dist > bin and dist <= bin+20]) for bin in bin_it]) for frac_loss in fractional_losses]
+bin_it = np.linspace(0, max_distance, 31)
+hists = [np.array([sum([loss for loss,dist in itertools.izip(frac_loss[0], frac_loss[1]) if dist >= bin and dist < bin+20]) for bin in bin_it]) for frac_loss in fractional_losses]
 single_hist = sum(hists) / len(hists)
-counts, bins, patches = pylab.hist(single_hist, bin_it, color='r', histtype='step')
+plt.hist(bin_it, bins=bin_it, weights=single_hist, color='b', histtype='step')
+plt.title('Fractional muon energy loss along track')
+plt.xlabel('Track distance (m)')
+plt.ylabel('Average fractional energy loss')
+plt.show()
