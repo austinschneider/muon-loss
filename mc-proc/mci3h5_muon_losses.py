@@ -16,7 +16,20 @@ tray = I3Tray()
 #tray.Add("I3Reader", "my_reader", FilenameList=['GeoCalibDetectorStatus_2012.56063_V1.i3.gz','/scratch/aschneider/Level2_IC86.2012_nugen_numu.011374.000050.clsim-base-4.0.3.0.99_eff.i3.bz2'])
 
 
-infiles = ['/data/sim/IceCube/2012/filtered/level2/neutrino-generator/11374/00000-00999/clsim-base-4.0.3.0.99_eff/Level2_IC86.2012_nugen_numu.011374.%06.0f.clsim-base-4.0.3.0.99_eff.i3.bz2' % i for i in range(50, 61)]
+#infiles = ['/data/sim/IceCube/2012/filtered/level2/neutrino-generator/11374/00000-00999/clsim-base-4.0.3.0.99_eff/Level2_IC86.2012_nugen_numu.011374.%06.0f.clsim-base-4.0.3.0.99_eff.i3.bz2' % i for i in range(50, 61)]
+
+import argparse
+
+parser = argparse.ArgumentParser(description='Proccess filenames')
+
+parser.add_argument('infiles', metavar='infiles',  nargs='+')
+parser.add_argument('-g', '--geo', default='')
+parser.add_argument('-o', '--outfile', default='')
+
+args = parser.parse_args()
+infiles = args.infiles
+#geo = args.geo
+outfile = args.outfile
 
 class MyModule(icetray.I3ConditionalModule):
     def __init__(self, context):
@@ -58,7 +71,6 @@ class MyModule(icetray.I3ConditionalModule):
 
         self.PushFrame(frame)
 
-outfile = "out.h5"
 hdftable = hdfwriter.I3HDFTableService(outfile)
 
 tray.Add("I3Reader", "my_reader", FilenameList=infiles)
