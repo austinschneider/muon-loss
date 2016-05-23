@@ -93,6 +93,8 @@ class MyModule(icetray.I3ConditionalModule):
             HighEMuonLosses.append(highEMuons[0])
             for loss in losses[0]:
                 HighEMuonLosses.append(loss)
+        else:
+            del frame['I3MCWeightDict']
         frame['HighEMuonLosses'] = HighEMuonLosses
 
         self.PushFrame(frame)
@@ -120,7 +122,7 @@ while(len(infiles)):
         tray.Add(tableio.I3TableWriter,'hdf1',
                  tableservice = hdftable,
                  SubEventStreams = ['InIce', 'InIceSplit'],
-                 keys = ['HighEMuonLosses']
+                 keys = ['HighEMuonLosses', 'I3MCWeightDict']
                 )
         
         tray.Execute()
