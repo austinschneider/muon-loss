@@ -3,6 +3,8 @@ from __future__ import print_function
 
 import sys
 import itertools
+import glob
+import ntpath
 
 from icecube import icetray, dataio
 from icecube import dataclasses
@@ -22,15 +24,42 @@ import argparse
 
 parser = argparse.ArgumentParser(description='Proccess filenames')
 
-parser.add_argument('infiles', metavar='infiles',  nargs='+')
+parser.add_argument('indirs', metavar='indirs',  nargs='+')
 parser.add_argument('-g', '--geo', default='')
-parser.add_argument('-o', '--outfile', default='')
+parser.add_argument('-o', '--outdir', default='')
+parser.add_argument('-b', '--bundlesize', type=int, default=10)
 
 args = parser.parse_args()
-infiles = args.infiles
-#geo = args.geo
-outfile = args.outfile
+indirs = args.indirs
+geo = args.geo
+outdir = args.outdir
+bundle_size = args.bundlesize
 
+
+# Get files aleady processed by looking at the output directory
+# Output files have same similar filename structure to input files
+# Difference is output files have number range
+def get_processed_files(dir):
+    processed_files = set()
+    files = glob.glob('%s*.h5' % dir)
+    for f in files:
+        file_source = ntpath.splitext(ntpath.basename(f))[0] + '.i3.bz2'
+        if('-' in file_source.split('.')[3]):
+            source_nums = (lambda x: range(int(x[0]), int(x[1])+1))(file_source.split('.')[3].split('-')) #Filename has number after 3rd period
+            for n in source_nums:
+                source_split = file_source.split('.')
+                source_split[3] = '%06.0f' % n #Filename has number after third period
+                f_source = '.'.join(source_split)
+                processed_files.add(f_source)
+        else:
+            processed_files.add(file_source)
+                                                                               
+    return processed_files
+
+# Store 3 kinds of particles
+#   Primary neutrino
+#   Highest energy muon daughter
+#   Losses of that muon
 class MyModule(icetray.I3ConditionalModule):
     def __init__(self, context):
         super(MyModule, self).__init__(context)
@@ -44,8 +73,8 @@ class MyModule(icetray.I3ConditionalModule):
         Tree = frame['I3MCTree']
         primaries = Tree.primaries
         primaries = [p for p in primaries if p.type in self.nu_set]
-        #print(len(primaries))
         if(len(primaries)>1):
+            #Not the correct way to handle this. Don't expect this to happen so should throw an error
             print("More than one neutrino primary! Using max energy neutrino for frame.")
             primaries = [max(primaries, key=self.get_energy)]
         daughters = [Tree.get_daughters(p.id) for p in primaries] #Get the daughters of the primaries
@@ -54,16 +83,13 @@ class MyModule(icetray.I3ConditionalModule):
         highEMuons = [(m if abs(m.pos) < 500 else None) if m != None else None for m in highEMuons] #Choose only muons that start within 500m of the detector center
         highEMuons = [(m if m.energy >= 5000 else None) if m != None else None for m in highEMuons] #Choose only muons that are at least 5TeV
         losses = [[d for d in Tree.get_daughters(m) if d.type in self.loss_set] if m != None else None for m in highEMuons] #Get the muon daughters
-        #print(len([m for m in highEMuons if m != None]))
 
         if(len(muons) > 1):
             raise ValueError('There is more than one muon in the frame.')
 
         HighEMuonLosses = dataclasses.I3VectorI3Particle()
-        #for p,hEM,loss in itertools.izip(primaries, highEMuons, losses):
-        #    if hEM != None:
-        #        HighEMuonLosses.append(hEM)
         if highEMuons[0] != None:
+            HighEMuonLosses.append(primaries[0])
             HighEMuonLosses.append(highEMuons[0])
             for loss in losses[0]:
                 HighEMuonLosses.append(loss)
@@ -71,24 +97,39 @@ class MyModule(icetray.I3ConditionalModule):
 
         self.PushFrame(frame)
 
-hdftable = hdfwriter.I3HDFTableService(outfile)
+# Only look at files not already handled
+processed_files = get_processed_files(outdir)
+infiles = [file for indir in indirs for file in glob.glob('%s*.i3.bz2' % indir) if ntpath.basename(file) not in processed_files]
 
-tray.Add("I3Reader", "my_reader", FilenameList=infiles)
+infiles.sort()
 
-tray.Add(lambda frame: frame.Has('I3MCTree'))
+while(len(infiles)):
+    try:
+        # Pick the first N files to process
+        bundle = infiles[:bundle_size]
+        name_split = ntpath.basename(bundle[0]).split('.')
+        name_split[3]  = '%06.0f-%06.0f' % (lambda x: (min(x), max(x)))([int(ntpath.basename(infile).split('.')[3]) for infile in bundle])
+        outfile = outdir + '.'.join(name_split[:-2]) + '.h5'
 
-tray.Add(MyModule)
-
-tray.Add(tableio.I3TableWriter,'hdf1',
-         tableservice = hdftable,
-         SubEventStreams = ['InIce', 'InIceSplit'],
-         keys = ['HighEMuonLosses']
-        )
-
-#tray.Add("Dump")
-
-#tray.Add("I3Writer", DropOrphanStreams=[icetray.I3Frame.DAQ], filename="outfile.i3.bz2")
-
-
-tray.Execute()
-tray.Finish()
+        tray = I3Tray()
+        hdftable = hdfwriter.I3HDFTableService(outfile)
+        tray.Add("I3Reader", "my_reader", FilenameList=bundle)
+        tray.Add(lambda frame: frame.Has('I3MCTree'))
+        tray.Add(MyModule)
+        
+        tray.Add(tableio.I3TableWriter,'hdf1',
+                 tableservice = hdftable,
+                 SubEventStreams = ['InIce', 'InIceSplit'],
+                 keys = ['HighEMuonLosses']
+                )
+        
+        tray.Execute()
+        tray.Finish()
+    # Skip I3 files that have issues
+    except RuntimeError as e:
+        pass
+    
+    processed_files = get_processed_files(outdir)
+    infiles = [file for indir in indirs for file in glob.glob('%s*.i3.bz2' % indir) if ntpath.basename(file) not in processed_files]
+    infiles.sort()
+    #bundle_start += bundle_size
