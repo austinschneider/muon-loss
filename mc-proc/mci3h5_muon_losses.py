@@ -14,16 +14,21 @@ from icecube import tableio, hdfwriter
 from icecube import simclasses
 
 from I3Tray import *
-
-tray = I3Tray()
-
-#'/data/sim/IceCube/2012/filtered/level2/neutrino-generator/11374/00000-00999/clsim-base-4.0.3.0.99_eff/Level2_IC86.2012_nugen_numu.011374.000050.clsim-base-4.0.3.0.99_eff.i3.bz2'
-#tray.Add("I3Reader", "my_reader", FilenameList=['GeoCalibDetectorStatus_2012.56063_V1.i3.gz','/scratch/aschneider/Level2_IC86.2012_nugen_numu.011374.000050.clsim-base-4.0.3.0.99_eff.i3.bz2'])
-
-
-#infiles = ['/data/sim/IceCube/2012/filtered/level2/neutrino-generator/11374/00000-00999/clsim-base-4.0.3.0.99_eff/Level2_IC86.2012_nugen_numu.011374.%06.0f.clsim-base-4.0.3.0.99_eff.i3.bz2' % i for i in range(50, 61)]
-
 import argparse
+
+# Stores simulation information for muon neutrinos, highest energy daughter muon, and losses of the muon
+#   Primary: store I3Particle of the primary neutrino
+#   Track: store I3MMCTrackList (only contains one element, but must be stored as a vector because I3MMCTrack is not a frame object)
+#   Losses: store I3VectorI3Particle that contains all "stochastic" losses for the muon (DeltaE are ionization losses that are large enough that the simulation considers them stochastic, but they should be treated as continuous for the purposes of plotting)
+# Only keeps muons of at least 5TeV at creation
+# Only keeps muons that begin within 500m of the detector
+# Saves all information to an h5 file
+
+
+# Example directory:
+# /data/sim/IceCube/2012/filtered/level2/neutrino-generator/11374/00000-00999/clsim-base-4.0.3.0.99_eff/
+# Example file:
+# /data/sim/IceCube/2012/filtered/level2/neutrino-generator/11374/00000-00999/clsim-base-4.0.3.0.99_eff/Level2_IC86.2012_nugen_numu.011374.000050.clsim-base-4.0.3.0.99_eff.i3.bz2
 
 # Initialize arg parser
 parser = argparse.ArgumentParser(description='Proccess filenames')
@@ -38,11 +43,6 @@ indirs = args.indirs
 geo = args.geo
 outdir = args.outdir
 bundle_size = args.bundlesize
-
-def unique_list(seq):
-    seen = set()
-    seen_add = seen.add
-    return [x for x in seq if not (x in seen or seen_add(x))]
 
 # Get files aleady processed by looking at the output directory
 # Output files have same similar filename structure to input files
@@ -101,10 +101,10 @@ class MyModule(icetray.I3ConditionalModule):
         tracks = [track for track in tracks if Tree_parent(track.particle).type in nu_set] # Only tracks that have nu parent
         tracks = [track for track in tracks if Tree_parent(track.particle) in primaries] # Only tracks that have primary parent
         
-        tracks = [track for track in tracks if track.particle.energy > 5000] # Only muons that are at least 5TeV at creation
+        tracks = [track for track in tracks if track.particle.energy >= 5000] # Only muons that are at least 5TeV at creation
         tracks = [track for track in tracks if abs(track.particle.pos) < 500] # Only muons that are created within 500m of the detector
 
-        nu_primaries_of_tracks = unique_list([Tree_parent(track.particle) for track in tracks])
+        nu_primaries_of_tracks = np.unique([Tree_parent(track.particle) for track in tracks])
         tracks_by_primary = [[track for track in tracks if Tree_parent(track.particle) == p] for p in nu_primaries_of_tracks]
         max_E_muons_by_primary = [max(tracks_for_primary, key=self.get_energy) for tracks_for_primary in tracks_by_primary]
 
@@ -117,6 +117,7 @@ class MyModule(icetray.I3ConditionalModule):
         HighEMuonTracks = simclasses.I3MMCTrackList()
         if(n_muons > 0):
             muon_track = max_E_muons_by_primary[0]
+            HighEMuonTracks.append(muon_track)
             losses = [d for d in Tree.get_daughters(muon_track.particle) if d.type in loss_set] #Get the muon daughters
             for loss in losses:
                 HighEMuonLosses.append(loss)
@@ -125,7 +126,6 @@ class MyModule(icetray.I3ConditionalModule):
             frame['Losses'] = HighEMuonLosses
             self.PushFrame(frame)
 
-# Only look at files not already handled
 infiles = get_infiles(indirs, outdir)
 
 while(len(infiles)):
