@@ -1,17 +1,22 @@
 #!/usr/bin/env python
 from __future__ import print_function
 
-import pdb
-
+import os
 import sys
 import itertools
 import glob
 import ntpath
+import pickle
+
+import numpy as np
 
 from icecube import icetray, dataio
 from icecube import dataclasses
 from icecube import tableio, hdfwriter
 from icecube import simclasses
+from icecube import NewNuFlux
+from icecube.icetray import I3Units
+from icecube.weighting.weighting import from_simprod
 
 from I3Tray import *
 import argparse
@@ -49,7 +54,8 @@ bundle_size = args.bundlesize
 # Difference is output files have number range
 def get_processed_files(dir):
     processed_files = set()
-    files = glob.glob('%s*.h5' % dir)
+    #files = glob.glob('%s*.h5' % dir)
+    files = glob.glob('%s*.pkl' % dir)
     for f in files:
         file_source = ntpath.splitext(ntpath.basename(f))[0] + '.i3.bz2'
         if('-' in file_source.split('.')[3]): # If there is a number range
@@ -78,6 +84,16 @@ loss_set = set([p.PairProd, p.DeltaE, p.Brems, p.NuclInt])
 nu_set = set([p.Nu, p.NuE, p.NuEBar, p.NuMu, p.NuMuBar, p.NuTau, p.NuTauBar])
 mu_set = set([p.MuPlus, p.MuMinus])
 
+# Define global variables
+muon_checkpoints = []
+muon_losses = []
+weights = []
+
+mu_info = []
+nu_info = []
+
+flux = NewNuFlux.makeFlux('honda2006').getFlux
+
 # Store 3 kinds of particles
 #   Primary neutrino
 #   Highest energy muon daughter
@@ -92,6 +108,7 @@ class MyModule(icetray.I3ConditionalModule):
     def Physics(self, frame):
         Tree = frame['I3MCTree']
         tracks = frame['MMCTrackList']
+        weight_dict = frame['I3MCWeightDict']
         Tree_parent = Tree.parent
 
         primaries = Tree.primaries
@@ -117,8 +134,42 @@ class MyModule(icetray.I3ConditionalModule):
         HighEMuonTracks = simclasses.I3MMCTrackList()
         if(n_muons > 0):
             muon_track = max_E_muons_by_primary[0]
+            nu = nu_primaries_of_tracks[0]
+            muon_p = muon_track.particle
             HighEMuonTracks.append(muon_track)
-            losses = [d for d in Tree.get_daughters(muon_track.particle) if d.type in loss_set] #Get the muon daughters
+            losses = [d for d in Tree.get_daughters(muon_p) if d.type in loss_set] #Get the muon daughters
+
+            # Create loss tuples
+            loss_tuples = [(loss.energy, abs(loss.pos - muon_p.pos), int(loss.type)) for loss in losses]
+            muon_losses.append(loss_tuples)
+
+            # Create checkpoints
+            checkpoints = [(muon_p.energy, 0)] 
+            if(muon_track.Ei > 0): 
+                muon_pos_i = dataclasses.I3Position(muon_track.xi, muon_track.yi, muon_track.zi)
+                checkpoints.append((muon_track.Ei, abs(muon_pos_i - muon_p.pos)))
+            if(muon_track.Ef > 0):
+                muon_pos_f = dataclasses.I3Position(muon_track.xf, muon_track.yf, muon_track.zf)
+                checkpoints.append((muon_track.Ef, abs(muon_pos_f - muon_p.pos)))
+            checkpoints.append((0, muon_p.length))
+            muon_checkpoints.append(checkpoints)
+            
+            # Calculate weights
+            generator = from_simprod(11374)
+            #nu_energy = file.root.Primary.cols.energy[:]
+            #nu_type = file.root.Primary.cols.type[:]
+            #nu_zenith = file.root.Primary.cols.zenith[:]
+            nu_cos_zenith = np.cos(nu.dir.zenith)
+            nu_p_int = weight_dict['TotalInteractionProbabilityWeight']
+            nu_unit = I3Units.cm2/I3Units.m2
+            nu_weight = nu_p_int*(flux(nu.type, nu.energy, nu_cos_zenith)/nu_unit)/generator(nu.energy, nu.type, nu_cos_zenith)
+            weights.append(nu_weight)
+
+            mu_info.append((muon_p.energy, muon_p.pos.x, muon_p.pos.y, muon_p.pos.z, muon_p.dir.zenith, muon_p.dir.azimuth, muon_p.length))
+            nu_info.append((nu.energy, nu.pos.x, nu.pos.y, nu.pos.z, nu.dir.zenith, nu.dir.azimuth, nu.length))
+
+            # Store information as pickle
+
             for loss in losses:
                 HighEMuonLosses.append(loss)
             frame['Primary'] = Tree_parent(muon_track.particle)
@@ -128,34 +179,63 @@ class MyModule(icetray.I3ConditionalModule):
 
 infiles = get_infiles(indirs, outdir)
 
+bad_files = set()
+
+e = []
+
 while(len(infiles)):
     try:
         # Pick the first N files to process
         bundle = infiles[:bundle_size]
         name_split = ntpath.basename(bundle[0]).split('.')
         name_split[3]  = '%06.0f-%06.0f' % (lambda x: (min(x), max(x)))([int(ntpath.basename(infile).split('.')[3]) for infile in bundle]) # File number after third period
-        outfile = outdir + '.'.join(name_split[:-2]) + '.h5' # Remove the two extensions and replace with .h5
+        #outfile = outdir + '.'.join(name_split[:-2]) + '.h5' # Remove the two extensions and replace with .h5
+        outfile = outdir + '.'.join(name_split[:-2]) + '.pkl' # Remove the two extensions and replace with .pkl
+
+        os.system('touch %s' % outfile)
 
         tray = I3Tray()
-        hdftable = hdfwriter.I3HDFTableService(outfile)
+        #hdftable = hdfwriter.I3HDFTableService(outfile)
         tray.Add("I3Reader", "my_reader", FilenameList=bundle)
         tray.Add(lambda frame: frame.Has('I3MCTree'))
         tray.Add(lambda frame: frame.Has('I3MCWeightDict'))
         tray.Add(lambda frame: frame.Has('MMCTrackList'))
         tray.Add(MyModule)
         
-        tray.Add(tableio.I3TableWriter,'hdf1',
-                 tableservice = hdftable,
-                 SubEventStreams = ['InIce', 'InIceSplit'],
-                 keys = ['Primary', 'Track', 'Losses', 'I3MCWeightDict']
-                )
+        #tray.Add(tableio.I3TableWriter,'hdf1',
+        #         tableservice = hdftable,
+        #         SubEventStreams = ['InIce', 'InIceSplit'],
+        #         keys = ['Primary', 'Track', 'Losses', 'I3MCWeightDict']
+        #        )
         
         tray.Execute()
+        # Pickle the data
+        outpickle = open(outfile, 'wb')
+        pickle.dump(muon_losses, outpickle, -1)
+        pickle.dump(weights, outpickle, -1)
+        pickle.dump(muon_checkpoints, outpickle, -1)
+        pickle.dump(mu_info, outpickle, -1)
+        pickle.dump(nu_info, outpickle, -1)
+        outpickle.close()
+        # Clear the data before the next loop
+        muon_losses = []
+        weights = []
+        muon_checkpoints = []
+        mu_info = []
+        nu_info = []
         tray.Finish()
 
     # Skip I3 files that have issues
     except RuntimeError as e:
-        pass
+        #try:
+        #    bad_file = e.message.split('Error reading')[1].split('at frame')[0].strip(' ')
+        #except:
+        #    bad_file = ''
+        #    pass
+        #bad_files.add(bad_file)
+        for bad_file in bundle:
+            bad_files.add(bad_file)
+        #pass
     
-    infiles = get_infiles(indirs, outdir)
+    infiles = [file for file in get_infiles(indirs, outdir) if file not in bad_files]
 
