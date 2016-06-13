@@ -58,6 +58,23 @@ for attr in dir(p.ParticleType):
             pass
 exclude = set([particle_dict[e.lower()] for e in exclude if e != ''])
 
+sim_vol_length = 1600
+sim_vol_radius = 800
+
+sim_vol_top = sim_vol_length / 2
+sim_vol_bottom = -sim_vol_top
+
+
+muon_p_energy = 0
+muon_p_pos_x = 1
+muon_p_pos_y = 2
+muon_p_pos_z = 3
+muon_p_dir_zenith = 4
+muon_p_dir_azimuth = 5
+muon_p_length = 6
+
+is_in_sim_vol = lambda m: (m[muon_p_pos_z] < sim_vol_top and m[muon_p_pos_z] > sim_vol_bottom and (m[muon_p_pos_x]**2 + m[muon_p_pos_y]**2)**(0.5) < sim_vol_radius)
+
 # Define fucntion to get [1] item from list or tuple
 _get1 = op.itemgetter(1)
 
@@ -111,21 +128,21 @@ def get_bin_weights(points_by_entry, bins, weights):
     # List of points for each bin for each entry
     points_by_bin = np.array([[[(x, y) for x,y in points if x >= b1 and x < b2] for b1,b2 in itertools.izip(bins[:-1], bins[1:])] for points in points_by_entry])
 
-    weighted_y_by_bin = np.zeros((len(bins) - 1, 0)).tolist()
-    #y_weights = np.zeros((len(bins) - 1, 0)).tolist()
-    weighted_y_by_entry_by_bin = [[[(y, weight) for x,y in bin] for bin in points] for points,weight in itertools.izip(points_by_bin, weights)]
-    for i_entry in xrange(0, len(weighted_y_by_bin)):
-        for i_bin in xrange(0, len(bins)-1):
-            weighted_y_by_bin[i_bin] += weighted_y_by_entry_by_bin[i_entry][i_bin]
-            #y_weights[i_bin] += [weights[i_entry]] * len(weighted_y_by_entry_by_bin[i_entry][i_bin])
+    #weighted_y_by_bin = np.zeros((len(bins) - 1, 0)).tolist()
+    ##y_weights = np.zeros((len(bins) - 1, 0)).tolist()
+    #weighted_y_by_entry_by_bin = [[[(y, weight) for x,y in bin] for bin in points] for points,weight in itertools.izip(points_by_bin, weights)]
+    #for i_entry in xrange(0, len(weighted_y_by_bin)):
+    #    for i_bin in xrange(0, len(bins)-1):
+    #        weighted_y_by_bin[i_bin] += weighted_y_by_entry_by_bin[i_entry][i_bin]
+    #        #y_weights[i_bin] += [weights[i_entry]] * len(weighted_y_by_entry_by_bin[i_entry][i_bin])
 
-    weighted_x_by_bin = np.zeros((len(bins) - 1, 0)).tolist()
-    #x_weights = np.zeros((len(bins) - 1, 0)).tolist()
-    weighted_x_by_entry_by_bin = [[[(x, weight) for x,y in bin] for bin in points] for points,weight in itertools.izip(points_by_bin, weights)]
-    for i_entry in xrange(0, len(weighted_x_by_bin)):
-        for i_bin in xrange(0, len(bins)-1):
-            weighted_x_by_bin[i_bin] += weighted_x_by_entry_by_bin[i_entry][i_bin]
-            #x_weights[i_bin] += [weights[i_entry]] * len(weighted_x_by_entry_by_bin[i_entry][i_bin])
+    #weighted_x_by_bin = np.zeros((len(bins) - 1, 0)).tolist()
+    ##x_weights = np.zeros((len(bins) - 1, 0)).tolist()
+    #weighted_x_by_entry_by_bin = [[[(x, weight) for x,y in bin] for bin in points] for points,weight in itertools.izip(points_by_bin, weights)]
+    #for i_entry in xrange(0, len(weighted_x_by_bin)):
+    #    for i_bin in xrange(0, len(bins)-1):
+    #        weighted_x_by_bin[i_bin] += weighted_x_by_entry_by_bin[i_entry][i_bin]
+    #        #x_weights[i_bin] += [weights[i_entry]] * len(weighted_x_by_entry_by_bin[i_entry][i_bin])
 
     # Sum of y values for each bin for each entry
     y_sum_by_bin = np.array([[sum([y for x,y in bin]) for bin in points] for points in points_by_bin])
@@ -150,7 +167,8 @@ def get_bin_weights(points_by_entry, bins, weights):
     weighted_y_sq_sum = np.dot(weights, y_sq_sum_by_bin)
     weighted_x_sum = np.dot(weights, x_sum_by_bin)
 
-    return (weighted_x_sum, weighted_y_sum, bin_weights, weighted_y_sq_sum, bin_sq_weights, weighted_x_by_bin, weighted_y_by_bin)
+    #return (weighted_x_sum, weighted_y_sum, bin_weights, weighted_y_sq_sum, bin_sq_weights, weighted_x_by_bin, weighted_y_by_bin)
+    return (weighted_x_sum, weighted_y_sum, bin_weights, weighted_y_sq_sum, bin_sq_weights)
 
 def plot_dEdx(infos, E_bins, points_labels, plotdir):
 
@@ -159,7 +177,8 @@ def plot_dEdx(infos, E_bins, points_labels, plotdir):
     for info,label,color in itertools.izip(infos, points_labels, colors):
         print(label)
 
-        file_weighted_E, file_weighted_dEdx, file_bin_weights, file_weighted_dEdx_sq, file_bin_sq_weights, weighted_x_by_file_by_bin, weighted_y_by_file_by_bin = info
+        #file_weighted_E, file_weighted_dEdx, file_bin_weights, file_weighted_dEdx_sq, file_bin_sq_weights, weighted_x_by_file_by_bin, weighted_y_by_file_by_bin = info
+        file_weighted_E, file_weighted_dEdx, file_bin_weights, file_weighted_dEdx_sq, file_bin_sq_weights = info
         weighted_x_by_bin = np.zeros((len(E_bins) - 1, 0)).tolist()
         for i_file in xrange(0, len(weighted_x_by_file_by_bin)):
             for i_bin in xrange(0, len(E_bins)-1):
@@ -170,69 +189,69 @@ def plot_dEdx(infos, E_bins, points_labels, plotdir):
             for i_bin in xrange(0, len(E_bins)-1):
                 weighted_y_by_bin[i_bin] += weighted_y_by_file_by_bin[i_file][i_bin]
 
-        for contents,bin1,bin2 in itertools.izip(weighted_x_by_bin, E_bins[:-1], E_bins[1:]):
-            points = [x for x,w in contents]
-            weights = np.array([w for x,w in contents])
-            weights = weights / sum(weights)
+        #for contents,bin1,bin2 in itertools.izip(weighted_x_by_bin, E_bins[:-1], E_bins[1:]):
+        #    points = [x for x,w in contents]
+        #    weights = np.array([w for x,w in contents])
+        #    weights = weights / sum(weights)
 
-            non_zero_points = [p for p in points if p > 0]
+        #    non_zero_points = [p for p in points if p > 0]
 
-            fig = plt.figure()
-            if len(points):
-                fine_bins = np.logspace(np.floor(np.log10(min(non_zero_points))), np.ceil(np.log10(max(non_zero_points))), 20+1)
-                plt.hist(points, weights=weights, bins=fine_bins, color=color, histtype='step')
-            else:
-                plt.plot([])
-            title = label + ':E in %fGeV-%fGeV bin' % (bin1, bin2)
+        #    fig = plt.figure()
+        #    if len(points):
+        #        fine_bins = np.logspace(np.floor(np.log10(min(non_zero_points))), np.ceil(np.log10(max(non_zero_points))), 20+1)
+        #        plt.hist(points, weights=weights, bins=fine_bins, color=color, histtype='step')
+        #    else:
+        #        plt.plot([])
+        #    title = label + ':E in %fGeV-%fGeV bin' % (bin1, bin2)
 
-            print(title + ': %d' % len(points))
-            print('len: %d' % len(points))
-            if(len(points)):
-                print('min: ', min(contents, key=op.itemgetter(0)))
-                print('max: ', max(contents, key=op.itemgetter(0)))
-            print
-           
-            plt.title(title)
-            plt.xscale('log')
-            plt.yscale('log')
-            plt.ylim([10**(-7), 1])
-            plt.xlabel('Muon Energy (GeV)')
-            plt.ylabel('Counts')
-            plt.savefig(plotdir + re.sub(' ', '_', title.translate(None, '\\/:!@#$%Z^&*()+=`;"\'?><,|{}')) + '.png')
-            plt.close(fig)
-            #plt.show()
+        #    print(title + ': %d' % len(points))
+        #    print('len: %d' % len(points))
+        #    if(len(points)):
+        #        print('min: ', min(contents, key=op.itemgetter(0)))
+        #        print('max: ', max(contents, key=op.itemgetter(0)))
+        #    print
+        #   
+        #    plt.title(title)
+        #    plt.xscale('log')
+        #    plt.yscale('log')
+        #    plt.ylim([10**(-7), 1])
+        #    plt.xlabel('Muon Energy (GeV)')
+        #    plt.ylabel('Counts')
+        #    plt.savefig(plotdir + re.sub(' ', '_', title.translate(None, '\\/:!@#$%Z^&*()+=`;"\'?><,|{}')) + '.png')
+        #    plt.close(fig)
+        #    #plt.show()
 
-        for contents,bin1,bin2 in itertools.izip(weighted_y_by_bin, E_bins[:-1], E_bins[1:]):
-            points = [x for x,w in contents]
-            weights = np.array([w for x,w in contents])
-            weights = weights / sum(weights)
+        #for contents,bin1,bin2 in itertools.izip(weighted_y_by_bin, E_bins[:-1], E_bins[1:]):
+        #    points = [x for x,w in contents]
+        #    weights = np.array([w for x,w in contents])
+        #    weights = weights / sum(weights)
 
-            non_zero_points = [p for p in points if p > 0]
+        #    non_zero_points = [p for p in points if p > 0]
 
-            fig = plt.figure()
-            if len(points):
-                fine_bins = np.logspace(np.floor(np.log10(min(non_zero_points))), np.ceil(np.log10(max(non_zero_points))), 20+1)
-                plt.hist(points, weights=weights, bins=fine_bins, color=color, histtype='step')
-            else:
-                plt.plot([])
-            title = label + ':dE/dx in %fGeV-%fGeV bin' % (bin1, bin2)
-            
-            print(title)
-            print('len: %d' % len(points))
-            if(len(points)):
-                print('min: ', min(contents, key=op.itemgetter(0)))
-                print('max: ', max(contents, key=op.itemgetter(0)))
-            print
-            
-            plt.title(title)
-            plt.xscale('log')
-            plt.yscale('log')
-            plt.ylim([10**(-7), 1])
-            plt.xlabel('Muon Energy Loss (GeV/m)')
-            plt.ylabel('Counts')
-            plt.savefig(plotdir + re.sub(' ', '_', title.translate(None, '\\/:!@#$%Z^&*()+=`;"\'?><,|{}')) + '.png')
-            plt.close(fig)
-            #plt.show()
+        #    fig = plt.figure()
+        #    if len(points) and len(non_zero_points):
+        #        fine_bins = np.logspace(np.floor(np.log10(min(non_zero_points))), np.ceil(np.log10(max(non_zero_points))), 20+1)
+        #        plt.hist(points, weights=weights, bins=fine_bins, color=color, histtype='step')
+        #    else:
+        #        plt.plot([])
+        #    title = label + ':dE/dx in %fGeV-%fGeV bin' % (bin1, bin2)
+        #    
+        #    print(title)
+        #    print('len: %d' % len(points))
+        #    if(len(points)):
+        #        print('min: ', min(contents, key=op.itemgetter(0)))
+        #        print('max: ', max(contents, key=op.itemgetter(0)))
+        #    print
+        #    
+        #    plt.title(title)
+        #    plt.xscale('log')
+        #    plt.yscale('log')
+        #    plt.ylim([10**(-7), 1])
+        #    plt.xlabel('Muon Energy Loss (GeV/m)')
+        #    plt.ylabel('Counts')
+        #    plt.savefig(plotdir + re.sub(' ', '_', title.translate(None, '\\/:!@#$%Z^&*()+=`;"\'?><,|{}')) + '.png')
+        #    plt.close(fig)
+        #    #plt.show()
     colors = ['b', 'g', 'm']
   
     colors = ['b', 'g', 'm']
@@ -240,7 +259,8 @@ def plot_dEdx(infos, E_bins, points_labels, plotdir):
     fig = plt.figure()
 
     for info,label,color in itertools.izip(infos, points_labels, colors):
-        file_weighted_E, file_weighted_dEdx, file_bin_weights, file_weighted_dEdx_sq, file_bin_sq_weights, weighted_x_by_file_by_bin, weighted_y_by_file_by_bin = info
+        #file_weighted_E, file_weighted_dEdx, file_bin_weights, file_weighted_dEdx_sq, file_bin_sq_weights, weighted_x_by_file_by_bin, weighted_y_by_file_by_bin = info
+        file_weighted_E, file_weighted_dEdx, file_bin_weights, file_weighted_dEdx_sq, file_bin_sq_weights = info
         bin_weights = sum(file_bin_weights)
         bin_weights = np.array([weight if weight > 0 else 1 for weight in bin_weights])
         dEdx_by_bin = sum(file_weighted_dEdx) / bin_weights
@@ -268,15 +288,31 @@ def plot_dEdx(infos, E_bins, points_labels, plotdir):
     plt.close(fig)
     #plt.show()
 
-def get_E_dEdx_points(losses, weights, checkpoints, get_point, sample_d = 10 ):
+def get_E_dEdx_points(losses, weights, checkpoints, mu_info, get_point, sample_d = 10 ):
     # Don't go out of the simulation volume. Each muon has at least 2 checkponts (start, end), often a third where it exits simulation volume
-    max_range = [cps[-2][1] if len(cps) > 2 else cps[-1][1] for cps in checkpoints]
+    
+    #max_range = [cps[-2][1] if len(cps) > 2 else cps[-1][1] for cps in checkpoints]
     points = []
-    for cps,loss_tuples,r in itertools.izip(checkpoints, losses, max_range):
+    #for cps,loss_tuples,r in itertools.izip(checkpoints, losses, max_range):
+    for cps,loss_tuples,mu in itertools.izip(checkpoints, losses, mu_info):
+        min_range = 0
+        max_range = 0
+        if(is_in_sim_vol(mu)):
+            min_range = 0
+            max_range = cps[1][1] # Can either have cps (start, exit, end) or (start, end)
+        else:
+            if(len(cps) == 2):
+                continue
+            elif(len(cps) == 3):
+                min_range = cps[1][1]
+                max_range = cps[-1][1]
+            elif(len(cps) == 4):
+                min_range = cps[1][1]
+                max_range = cps[2][1]
         points_for_muon = []
-        x1 = 0
+        x1 = min_range
         x2 = sample_d
-        while(x2 <= r):
+        while(x2 <= max_range):
             points_for_muon.append(get_point(x1, x2, cps, tuple(loss_tuples)))
             x1 += sample_d
             x2 += sample_d
@@ -305,7 +341,7 @@ def get_info_from_dirs(indirs, E_bins, points_functions):
     infos = None
 
     # Loop over input files
-    for infile in infiles:
+    for infile in infiles[:6]:
         if os.stat(infile).st_size == 0:
             continue
         print(infile)
@@ -315,12 +351,26 @@ def get_info_from_dirs(indirs, E_bins, points_functions):
         n_muons += len(losses)
 
         # Load weights for each muon
-        weights = np.array(pickle.load(inpickle))
+        weights = pickle.load(inpickle)
 
         # Load track energy checkpoints for each muon
-        checkpoints = np.array(pickle.load(inpickle))
+        checkpoints = pickle.load(inpickle)
+        
+        mu_info = pickle.load(inpickle)
+        #nu_info = np.array(pickle.load(inpickle))
 
-        points_entries = [get_E_dEdx_points(losses, weights, checkpoints, func) for func in points_functions]
+        #is_in_sim_mask = [is_in_sim_vol(m) for m in mu_info]
+        #losses = [loss_tuples for loss_tuples,b in itertools.izip(losses, is_in_sim_mask) if b]
+        #weights = [w for w,b in itertools.izip(weights, is_in_sim_mask) if b]
+        #checkpoints = [cps for cps,b in itertools.izip(checkpoints, is_in_sim_mask) if b]
+        #mu_info = [m for m,b in itertools.izip(mu_info, is_in_sim_mask) if b]
+
+        losses = np.array(losses)
+        weights = np.array(weights)
+        checkpoints = np.array(checkpoints)
+        mu_info = np.array(mu_info)
+        
+        points_entries = [get_E_dEdx_points(losses, weights, checkpoints, mu_info, func) for func in points_functions]
         info_entries = [get_bin_weights(points, E_bins, weights) for points in points_entries]
 
         if infos == None:

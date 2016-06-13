@@ -94,6 +94,14 @@ nu_info = []
 
 flux = NewNuFlux.makeFlux('honda2006').getFlux
 
+sim_vol_length = 1600
+sim_vol_radius = 800
+
+sim_vol_top = sim_vol_length / 2
+sim_vol_bottom = -sim_vol_top
+
+is_in_sim_vol = lambda pos: (pos.z < sim_vol_top and pos.z > sim_vol_bottom and pos.rho < sim_vol_radius)
+
 # Store 3 kinds of particles
 #   Primary neutrino
 #   Highest energy muon daughter
@@ -118,8 +126,9 @@ class MyModule(icetray.I3ConditionalModule):
         tracks = [track for track in tracks if Tree_parent(track.particle).type in nu_set] # Only tracks that have nu parent
         tracks = [track for track in tracks if Tree_parent(track.particle) in primaries] # Only tracks that have primary parent
         
-        tracks = [track for track in tracks if track.particle.energy >= 5000] # Only muons that are at least 5TeV at creation
-        tracks = [track for track in tracks if abs(track.particle.pos) < 500] # Only muons that are created within 500m of the detector
+        #tracks = [track for track in tracks if track.particle.energy >= 5000] # Only muons that are at least 5TeV at creation
+        #tracks = [track for track in tracks if abs(track.particle.pos) < 500] # Only muons that are created within 500m of the detector
+        tracks = [track for track in tracks if track.Ei > 0 or track.Ef > 0 or is_in_sim_vol(track.particle.pos)] # Only muons that are in the simulation volume at some point
 
         nu_primaries_of_tracks = np.unique([Tree_parent(track.particle) for track in tracks])
         tracks_by_primary = [[track for track in tracks if Tree_parent(track.particle) == p] for p in nu_primaries_of_tracks]
