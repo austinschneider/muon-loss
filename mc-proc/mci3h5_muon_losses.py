@@ -102,6 +102,8 @@ sim_vol_bottom = -sim_vol_top
 
 is_in_sim_vol = lambda pos: (pos.z < sim_vol_top and pos.z > sim_vol_bottom and pos.rho < sim_vol_radius)
 
+generator = from_simprod(11374)
+
 # Store 3 kinds of particles
 #   Primary neutrino
 #   Highest energy muon daughter
@@ -126,10 +128,6 @@ class MyModule(icetray.I3ConditionalModule):
         tracks = [track for track in tracks if Tree_parent(track.particle).type in nu_set] # Only tracks that have nu parent
         tracks = [track for track in tracks if Tree_parent(track.particle) in primaries] # Only tracks that have primary parent
         
-        #tracks = [track for track in tracks if track.particle.energy >= 5000] # Only muons that are at least 5TeV at creation
-        #tracks = [track for track in tracks if abs(track.particle.pos) < 500] # Only muons that are created within 500m of the detector
-        tracks = [track for track in tracks if track.Ei > 0 or track.Ef > 0 or is_in_sim_vol(track.particle.pos)] # Only muons that are in the simulation volume at some point
-
         nu_primaries_of_tracks = np.unique([Tree_parent(track.particle) for track in tracks])
         tracks_by_primary = [[track for track in tracks if Tree_parent(track.particle) == p] for p in nu_primaries_of_tracks]
         max_E_muons_by_primary = [max(tracks_for_primary, key=self.get_energy) for tracks_for_primary in tracks_by_primary]
@@ -154,20 +152,14 @@ class MyModule(icetray.I3ConditionalModule):
 
             # Create checkpoints
             checkpoints = [(muon_p.energy, 0)] 
-            if(muon_track.Ei > 0): 
-                muon_pos_i = dataclasses.I3Position(muon_track.xi, muon_track.yi, muon_track.zi)
-                checkpoints.append((muon_track.Ei, abs(muon_pos_i - muon_p.pos)))
-            if(muon_track.Ef > 0):
-                muon_pos_f = dataclasses.I3Position(muon_track.xf, muon_track.yf, muon_track.zf)
-                checkpoints.append((muon_track.Ef, abs(muon_pos_f - muon_p.pos)))
+            muon_pos_i = dataclasses.I3Position(muon_track.xi, muon_track.yi, muon_track.zi)
+            checkpoints.append((muon_track.Ei, abs(muon_pos_i - muon_p.pos)))
+            muon_pos_f = dataclasses.I3Position(muon_track.xf, muon_track.yf, muon_track.zf)
+            checkpoints.append((muon_track.Ef, abs(muon_pos_f - muon_p.pos)))
             checkpoints.append((0, muon_p.length))
             muon_checkpoints.append(checkpoints)
             
             # Calculate weights
-            generator = from_simprod(11374)
-            #nu_energy = file.root.Primary.cols.energy[:]
-            #nu_type = file.root.Primary.cols.type[:]
-            #nu_zenith = file.root.Primary.cols.zenith[:]
             nu_cos_zenith = np.cos(nu.dir.zenith)
             nu_p_int = weight_dict['TotalInteractionProbabilityWeight']
             nu_unit = I3Units.cm2/I3Units.m2
