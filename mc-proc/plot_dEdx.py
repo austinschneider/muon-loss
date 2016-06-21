@@ -137,7 +137,7 @@ def get_energy(x, checkpoints, losses):
     loss_rate, losses = get_loss_info((cp1, cp2, losses))
     
     # losses since last checkpoint
-    stoch_loss_since_cp1 = sum([l[0] for l in losses if l[1] <= x])
+    stoch_loss_since_cp1 = sum([l[0] for l in losses if l[1] < x])
 
     # (E at last cp) - (stoch losses since last cp) - (loss rate * distance from last cp)
     energy = cp1[0] - stoch_loss_since_cp1 - (x - cp1[1]) * loss_rate
@@ -146,7 +146,7 @@ def get_energy(x, checkpoints, losses):
 
 def plot_dEdx(hists, E_bins, points_labels, plotdir):
 
-    colors = ['b', 'g', 'm']
+    colors = ['b', 'g', 'm', 'c']
     
     fig = plt.figure()
 
@@ -169,12 +169,12 @@ def plot_dEdx(hists, E_bins, points_labels, plotdir):
 
         alt_err = np.where(y < error_of_mean_by_bin, 0, error_of_mean_by_bin)
 
-        plt.errorbar(x, y, fmt=color+'o', label=label, yerr=[alt_err, error_of_mean_by_bin])
+        plt.errorbar(x, y, fmt=color+'.', label=label, yerr=[alt_err, error_of_mean_by_bin])
         plt.hist(x, bins=E_bins, weights=y, color=color, histtype='step')
     
     line = lambda x: 0.259*0.917+0.363*10**(-3)*0.917*x
-    plt.plot(x,line(x), 'ro', linewidth=2.0, label='Expected total losses')
-    plt.axis([1, 10**6, 10**(-1), 10**4])
+    plt.plot(x,line(x), 'r.', linewidth=2.0, label='Expected total losses')
+    plt.axis([1, 10**6, 10**(-4), 10**4])
     plt.legend(loc=2)
     plt.xlabel('Muon Energy (GeV)')
     plt.ylabel('dE/dx (GeV/m)')
@@ -184,7 +184,8 @@ def plot_dEdx(hists, E_bins, points_labels, plotdir):
     plt.close(fig)
     #plt.show()
 
-def add_E_dEdx_points(losses, weights, checkpoints, mu_info, get_point, hist, sample_d = 10 ):
+def add_E_dEdx_points(losses, weights, checkpoints, mu_info, get_point, hist, sample_d = 10, sample_E = 10):
+    min_d = .01
     # Don't go out of the simulation volume. Each muon has at least 2 checkponts (start, end), often a third where it exits simulation volume
     
     n_muons = 0
@@ -212,16 +213,44 @@ def add_E_dEdx_points(losses, weights, checkpoints, mu_info, get_point, hist, sa
 
         min_range = cps[min_cp][1]
         max_range = cps[max_cp][1]
-        new_cps = [cps[min_cp], cps[max_cp]]
+        new_cps = (tuple(cps[min_cp]), tuple(cps[max_cp]))
 
         if max_range - min_range > 10000:
             print("Range greater than 10000m!")
+
+        next_losses = sorted(loss_tuples, key=_get1)[:]
+        loss_tuples = tuple(loss_tuples)
+        last_E = new_cps[0][0]
+        break_next = False
 
         x1 = min_range
         x2 = x1 + sample_d
         while(x2 <= max_range):
             try:
-                E, dEdx = get_point(x1, x2, new_cps, tuple(loss_tuples))
+                E, dEdx = get_point((x1, x2, new_cps, loss_tuples))
+                
+                if E - last_E > sample_E:
+                    
+                    loss_candidates = [loss for loss in next_losses if loss[1] < x2]
+                    for loss in reversed(loss_candidates):
+                        x2 = loss[1]
+                        E, dEdx = get_point((x1, x2, new_cps, loss_tuples))
+                        if E - last_E <= sample_E:
+                            break
+                   
+                    if x1 == x2:
+                        x2_candidates = [x1 + min_d]
+                        if len(loss_candidates) > 1:
+                            x2_candidates.append(loss_candidates[1][1])
+                        x2 = min(x2_candidates)
+                    else:
+                        while(E - last_E > sample_E):
+                            x2 = (x1 + x2) / 2.0
+                            E, dEdx = get_point((x1, x2, new_cps, loss_tuples))
+                    
+                if x1 >= x2:
+                    raise
+
             except:
                 print(x1, x2)
                 print(new_cps)
@@ -229,11 +258,43 @@ def add_E_dEdx_points(losses, weights, checkpoints, mu_info, get_point, hist, sa
             point_E.append(E)
             point_dEdx.append(dEdx)
             point_weight.append(weight)
-            x1 += sample_d
+
+            next_losses = [loss for loss in next_losses if loss[1] >= x2]
+            last_E = E
+
+            if break_next:
+                break
+
+            x1 = x2
             x2 += sample_d
+            if x2 > max_range:
+                x2 = max_range
+                break_next = True
+            
         n_muons += 1
         #print("Have %d muons!" % n_muons)
         hist.add(point_E, point_dEdx, point_weight)
+
+        if not n_muons % 1000:
+            print("%d muons in file" % n_muons)
+        
+        #x1 = min_range
+        #x2 = x1 + sample_d
+        #while(x2 <= max_range):
+        #    try:
+        #        E, dEdx = get_point(x1, x2, new_cps, tuple(loss_tuples))
+        #    except:
+        #        print(x1, x2)
+        #        print(new_cps)
+        #        raise
+        #    point_E.append(E)
+        #    point_dEdx.append(dEdx)
+        #    point_weight.append(weight)
+        #    x1 += sample_d
+        #    x2 += sample_d
+        #n_muons += 1
+        ##print("Have %d muons!" % n_muons)
+        #hist.add(point_E, point_dEdx, point_weight)
 
     return n_muons
 
@@ -249,7 +310,7 @@ def get_hists_from_dirs(indirs, E_bins, points_functions):
         hists.append(histogram(E_bins))
 
     # Loop over input files
-    for infile in infiles[:15]:
+    for infile in infiles:
         if os.stat(infile).st_size == 0:
             continue
         print(infile)
@@ -298,19 +359,28 @@ def save_info_to_file(outfile, hists, E_bins):
 
     outpickle.close()
     
-def get_total_losses_point(x1, x2, cps, loss_tuples):
+def get_total_losses_point(stuff):
+    x1, x2, cps, loss_tuples = stuff
     E_at_x1 = get_energy(x1, cps, loss_tuples)
     E_at_x2 = get_energy(x2, cps, loss_tuples)
     return (E_at_x1, abs((E_at_x1 - E_at_x2)) / (x2 - x1))
    
-def get_stoch_losses_point(x1, x2, cps, loss_tuples):
+def get_stoch_losses_point(stuff):
+    x1, x2, cps, loss_tuples = stuff
     return (get_energy(x1, cps, loss_tuples), abs(sum([e for e,d,t in loss_tuples if t not in exclude and d >= x1 and d < x2]) / (x2 - x1)))
 
-def get_mc_stoch_losses_point(x1, x2, cps, loss_tuples):
+def get_mc_stoch_losses_point(stuff):
+    x1, x2, cps, loss_tuples = stuff
     return (get_energy(x1, cps, loss_tuples), abs(sum([e for e,d,t in loss_tuples if d >= x1 and d < x2]) / (x2 - x1)))
 
-points_functions = [get_total_losses_point, get_stoch_losses_point, get_mc_stoch_losses_point]
-points_labels = ['MC total losses', 'MC stochastic losses', 'MC stochastic losses w/ ionization']
+def get_cont_losses_point(stuff):
+    x1, x2, cps, loss_tuples = stuff
+    E_at_x1 = get_energy(x1, cps, loss_tuples)
+    E_at_x2 = get_energy(x2, cps, loss_tuples)
+    return (E_at_x1, (abs((E_at_x1 - E_at_x2)) - abs(sum([e for e,d,t in loss_tuples if d >= x1 and d < x2]))) / (x2 - x1))
+
+points_functions = [get_total_losses_point, get_stoch_losses_point, get_mc_stoch_losses_point, get_cont_losses_point]
+points_labels = ['MC total losses', 'MC stochastic losses', 'MC stochastic losses w/ ionization', 'MC continuous losses']
 
 #points_functions = [get_total_losses_point]
 #points_labels = ['MC total losses']
