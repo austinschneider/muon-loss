@@ -194,7 +194,14 @@ while(len(infiles)):
         outfile = outdir + '.'.join(name_split[:-2]) + '.pkl' # Remove the two extensions and replace with .pkl
 
         os.system('touch %s' % outfile)
-
+        
+        # Clear the data
+        muon_losses = []
+        weights = []
+        muon_checkpoints = []
+        mu_info = []
+        nu_info = []
+        
         tray = I3Tray()
         #hdftable = hdfwriter.I3HDFTableService(outfile)
         tray.Add("I3Reader", "my_reader", FilenameList=bundle)
@@ -218,12 +225,7 @@ while(len(infiles)):
         pickle.dump(mu_info, outpickle, -1)
         pickle.dump(nu_info, outpickle, -1)
         outpickle.close()
-        # Clear the data before the next loop
-        muon_losses = []
-        weights = []
-        muon_checkpoints = []
-        mu_info = []
-        nu_info = []
+        
         tray.Finish()
 
     # Skip I3 files that have issues
