@@ -380,7 +380,7 @@ def add_points(losses, weights, checkpoints, mu_info, points_functions, hists, E
         loss_tuples = tuple(loss_tuples)
 
         for i in xrange(len(hists)):
-            for x1,x2 in itertools.izip(hist.bins[:-1], hist.bins[1:]):
+            for x1,x2 in itertools.izip(hists[i].bins[:-1], hists[i].bins[1:]):
                 x1 += min_range
                 x2 += min_range
                 if(x1 > max_range):
@@ -396,11 +396,11 @@ def add_points(losses, weights, checkpoints, mu_info, points_functions, hists, E
                 point_weight[i].append(weight)
                 #if(x2 == max_range):
                 #    break
-            total_dE = sum(point_dE)
+            total_dE = sum(point_dE[i])
             if(total_dE == 0):
                 continue
             point_frac_dE[i] = [dE / total_dE for dE in point_dE[i]]
-            point_x[i] = [x - min_range for x in point_x]
+            point_x[i] = [x - min_range for x in point_x[i]]
 
             hists[i].add(point_x[i], point_frac_dE[i], point_weight[i])
 
