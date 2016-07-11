@@ -85,17 +85,26 @@ class histogram:
         self.x2_weighted = np.zeros(size)
         self.y2_weighted = np.zeros(size)
     
-    def add(self, x, y, weights):
+    def add(self, x, y, weights, bin=None):
         x = np.array(x)
         y = np.array(y)
         weights = np.array(weights)
 
-        weights_by_bin, edges = np.histogram(x, bins=self.bins, weights=weights)
-        weights2_by_bin, edges = np.histogram(x, bins=self.bins, weights=weights**2)
-        x_weighted_by_bin, edges = np.histogram(x, bins=self.bins, weights=x * weights)
-        y_weighted_by_bin, edges = np.histogram(x, bins=self.bins, weights=y * weights)
-        x2_weighted_by_bin, edges = np.histogram(x, bins=self.bins, weights=x**2 * weights)
-        y2_weighted_by_bin, edges = np.histogram(x, bins=self.bins, weights=y**2 * weights)
+        if bin:
+            bin = np.array(bin)
+            weights_by_bin = np.bincount(bin, minlength=self.size, weights=weights)
+            weights2_by_bin = np.bincount(bin, minlength=self.size, weights=weights**2)
+            x_weighted_by_bin = np.bincount(bin, minlength=self.size, weights=x * weights)
+            y_weighted_by_bin = np.bincount(bin, minlength=self.size, weights=y * weights)
+            x2_weighted_by_bin = np.bincount(bin, minlength=self.size, weights=x**2 * weights)
+            y2_weighted_by_bin = np.bincount(bin, minlength=self.size, weights=y**2 * weights)
+        else:
+            weights_by_bin, edges = np.histogram(x, bins=self.bins, weights=weights)
+            weights2_by_bin, edges = np.histogram(x, bins=self.bins, weights=weights**2)
+            x_weighted_by_bin, edges = np.histogram(x, bins=self.bins, weights=x * weights)
+            y_weighted_by_bin, edges = np.histogram(x, bins=self.bins, weights=y * weights)
+            x2_weighted_by_bin, edges = np.histogram(x, bins=self.bins, weights=x**2 * weights)
+            y2_weighted_by_bin, edges = np.histogram(x, bins=self.bins, weights=y**2 * weights)
 
         self.weights += weights_by_bin
         self.weights2 += weights2_by_bin
@@ -147,7 +156,41 @@ def get_valid_checkpoints(cps):
     """
     track_cps = cps[1:-1]
     new_cps = [cps[0]] + [cp for cp in track_cps if cp[0] > 0] + [cps[-1]]
-    return new_cps
+    return tuple(sorted(new_cps, key=_get1))
+
+def add_loss_sum(losses, checkpoints):
+    """
+    Takes list of losses and checkpoints for a single track
+    Assumes that all the checkpoints are valid
+    Returns a list of losses with the loss sums added as the last element of each loss
+    """
+    next_dist = 0
+    total = 0
+    losses = sorted(list(losses), key=_get1)
+    for j in xrange(len(losses)):
+        if losses[j][1] >= next_dist:
+            next_dist = next(itertools.dropwhile(lambda cp: cp[1] <= losses[j][1], checkpoints), (None, np.inf))[1]
+            total = 0
+        total += losses[j][0]
+        losses[j] = tuple(list(losses[j]) + [total])
+    return tuple(losses)
+
+def get_track_range(cps):                                                                                                                                                                                   
+    """ 
+    Takes list of checkpoints
+    Returns range of track inside simulation volume
+    """
+    track_cps = cps[1:-1]
+    if track_cps[0][0] <= 0:
+        min_range = cps[0][1]
+    else:
+        min_range = track_cps[0][1]
+    if track_cps[-1][0] <= 0:
+        max_range = cps[-1][1]
+    else:
+        max_range = track_cps[-1][1]
+
+    return (min_range, max_range)
 
 @memodict
 def get_loss_info(stuff):
@@ -300,30 +343,20 @@ def add_E_dEdx_points(losses, weights, checkpoints, mu_info, points_functions, h
         point_E = np.zeros((len(hists), 0)).tolist()
         point_dEdx = np.zeros((len(hists), 0)).tolist()
         point_weight = np.zeros((len(hists), 0)).tolist()
+        point_bin = np.zeros((len(hists), 0)).tolist()
 
         # We should always have 5 checkpoints
         if len(cps) != 5:
             raise ValueError("There are %d checkpoints instead of 5." % len(cps))
         
-        track_cps = cps[1:-1]
+        min_range, max_range = get_track_range(cps)        
         new_cps = get_valid_checkpoints(cps)
+
+        track_cps = cps[1:-1]
+    
         starts_outside_simvol = track_cps[0][0] > 0
-        ends_outside_simvol = track_cps[-1][0] > 0
-
-        if starts_outside_simvol:
-            min_range = track_cps[0][1]
-        else:
-            min_range = cps[0][1]
-        if ends_outside_simvol:
-            max_range = track_cps[-1][1]
-        else:
-            max_range = cps[-1][1]
-
         if(starts_outside_simvol and track_cps[0][0] < 5000):
             continue
-
-        # Make the checkpoints tuples for memoization
-        new_cps = tuple([tuple(cp) for cp in new_cps])
 
         # Sanity check on the segment of track we are considering
         if max_range - min_range > 10000:
@@ -345,10 +378,16 @@ def add_E_dEdx_points(losses, weights, checkpoints, mu_info, points_functions, h
                 E1 = get_energy(x1, new_cps, loss_tuples)
 
                 # Energy that goes to the next bin
-                E2 = next((E for E in reversed(E_bins) if E < E1), 0)
+                Ei, E2 = next((E for E in reversed(list(enumerate(E_bins))) if E[1] < E1), (None, None))
+
+                if not Ei:
+                    break
 
                 if np.isclose(E1, E2, rtol=1e-05, atol=1e-09):
-                    E2 = next((E for E in reversed(E_bins) if E < E2), 0)
+                    Ei, E2 = next((E for E in reversed(list(enumerate(E_bins))) if E[1] < E2), (None, None))
+
+                if not Ei:
+                    break
 
                 # Set x2 to max range in case we can't make it to the next bin
                 x2 = max_range
@@ -404,19 +443,21 @@ def add_E_dEdx_points(losses, weights, checkpoints, mu_info, points_functions, h
                 elif np.isclose(x1, x2, rtol=1e-09, atol=1e-06):
                     raise ValueError("Begin and end are close: %f, %f" % (x1, x2))
 
-                # Get the dEdx point using predefined functions
-                # Input is single tuple to allow fast memoization if desired
-                for i in xrange(len(hists)):
-                    E, dEdx = points_functions[i]((x1, x2, new_cps, loss_tuples))
+                if E1 <= max(E_bins) and E1 >= min(E_bins):
+                    # Get the dEdx point using predefined functions
+                    # Input is single tuple to allow fast memoization if desired
+                    for i in xrange(len(hists)):
+                        E, dEdx = points_functions[i]((x1, x2, new_cps, loss_tuples))
 
-                    # We want E to take us into the next bin
-                    if np.isclose(E, E2, rtol=1e-05, atol=1e-09) and E >= E2:
-                        E = E2 - (E2 * 10**(-15))
+                        # We want E to take us into the next bin
+                        if np.isclose(E, E2, rtol=1e-05, atol=1e-09) and E >= E2:
+                            E = E2 - (E2 * 10**(-15))
 
-                    # Accumulate list of points to add to histogram
-                    point_E[i].append(E)
-                    point_dEdx[i].append(dEdx)
-                    point_weight[i].append(weight)
+                        # Accumulate list of points to add to histogram
+                        point_E[i].append(E)
+                        point_dEdx[i].append(dEdx)
+                        point_weight[i].append(weight)
+                        point_bin[i].append(Ei)
                 
             except:
                 print("####")
@@ -441,10 +482,9 @@ def add_E_dEdx_points(losses, weights, checkpoints, mu_info, points_functions, h
         #print("Have %d muons!" % n_muons)
         #print(point_E, point_dEdx, point_weight)
         for i in xrange(len(hists)):
-            hists[i].add(point_E[i], point_dEdx[i], point_weight[i])
-            if not i:
-                print point_E[i]
+            hists[i].add(point_E[i], point_dEdx[i], point_weight[i], point_bin[i])
 
+        # Clear the memoization dictionary for get_loss_info since we are done with the muon
         get_loss_info.__self__.clear()
 
         if not n_muons % 1000:
@@ -490,16 +530,7 @@ def get_hists_from_dirs(indirs, E_bins, points_functions):
         # Preemptively calculate the sum of losses since the last valid checkpoint and append the information to the loss
         # Offers drastic performance improvement
         for i in xrange(len(losses)):
-            next_dist = 0
-            total = 0
-            losses[i] = sorted(losses[i], key=_get1)
-            new_cps = get_valid_checkpoints(checkpoints[i])
-            for j in xrange(len(losses[i])):
-                if losses[i][j][1] >= next_dist:
-                    next_dist = next(itertools.dropwhile(lambda cp: cp[1] <= losses[i][j][1], new_cps), (None, np.inf))[1]
-                    total = 0
-                total += losses[i][j][0]
-                losses[i][j] = tuple(list(losses[i][j]) + [total])
+            losses[i] = add_loss_sum(losses[i], get_valid_checkpoints(checkpoints[i]))
         
         # Add points to the histograms using the points_functions
         n_muons += add_E_dEdx_points(losses, weights, checkpoints, mu_info, points_functions, hists, E_bins)
