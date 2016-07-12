@@ -89,6 +89,9 @@ muon_checkpoints = []
 muon_losses = []
 weights = []
 
+run_id = []
+event_id = []
+
 mu_info = []
 nu_info = []
 
@@ -102,7 +105,8 @@ sim_vol_bottom = -sim_vol_top
 
 is_in_sim_vol = lambda pos: (pos.z < sim_vol_top and pos.z > sim_vol_bottom and pos.rho < sim_vol_radius)
 
-generator = from_simprod(11374)
+#generator = from_simprod(11374)
+generator = from_simprod(10602)
 
 # Store 3 kinds of particles
 #   Primary neutrino
@@ -111,14 +115,20 @@ generator = from_simprod(11374)
 class MyModule(icetray.I3ConditionalModule):
     def __init__(self, context):
         super(MyModule, self).__init__(context)
+        self.keep_DAQ = False
     def get_energy(self, track):
         return track.particle.energy
     def Configure(self):
         pass
     def Physics(self, frame):
+        pass
+    def DAQ(self, frame):
+        self.keep_DAQ = False
+
         Tree = frame['I3MCTree']
         tracks = frame['MMCTrackList']
         weight_dict = frame['I3MCWeightDict']
+        header = frame['I3EventHeader']
         Tree_parent = Tree.parent
 
         primaries = Tree.primaries
@@ -127,6 +137,7 @@ class MyModule(icetray.I3ConditionalModule):
         tracks = [track for track in tracks if Tree.has(track.particle)] # Only tracks in MC tree
         tracks = [track for track in tracks if Tree_parent(track.particle).type in nu_set] # Only tracks that have nu parent
         tracks = [track for track in tracks if Tree_parent(track.particle) in primaries] # Only tracks that have primary parent
+        tracks = [track for track in tracks if track.particle.energy >= 5000] # Only muons that are at least 5TeV at creation
         
         nu_primaries_of_tracks = np.unique([Tree_parent(track.particle) for track in tracks])
         tracks_by_primary = [[track for track in tracks if Tree_parent(track.particle) == p] for p in nu_primaries_of_tracks]
@@ -137,46 +148,55 @@ class MyModule(icetray.I3ConditionalModule):
         if(n_muons > 1):
             raise ValueError('There is more than one muon in the frame')
         
-        HighEMuonLosses = dataclasses.I3VectorI3Particle()
-        HighEMuonTracks = simclasses.I3MMCTrackList()
+        #HighEMuonLosses = dataclasses.I3VectorI3Particle()
+        #HighEMuonTracks = simclasses.I3MMCTrackList()
         if(n_muons > 0):
             muon_track = max_E_muons_by_primary[0]
             nu = nu_primaries_of_tracks[0]
             muon_p = muon_track.particle
-            HighEMuonTracks.append(muon_track)
+            #HighEMuonTracks.append(muon_track)
             losses = [d for d in Tree.get_daughters(muon_p) if d.type in loss_set] #Get the muon daughters
 
             # Create loss tuples
             loss_tuples = [(loss.energy, abs(loss.pos - muon_p.pos), int(loss.type)) for loss in losses]
-            muon_losses.append(loss_tuples)
 
             # Create checkpoints
             checkpoints = [(muon_p.energy, 0)] 
+
             muon_pos_i = dataclasses.I3Position(muon_track.xi, muon_track.yi, muon_track.zi)
             checkpoints.append((muon_track.Ei, abs(muon_pos_i - muon_p.pos)))
+
+            muon_pos_c = dataclasses.I3Position(muon_track.xc, muon_track.yc, muon_track.zc)
+            checkpoints.append((muon_track.Ec, abs(muon_pos_c - muon_p.pos)))
+
             muon_pos_f = dataclasses.I3Position(muon_track.xf, muon_track.yf, muon_track.zf)
             checkpoints.append((muon_track.Ef, abs(muon_pos_f - muon_p.pos)))
+
             checkpoints.append((0, muon_p.length))
-            muon_checkpoints.append(checkpoints)
             
             # Calculate weights
             nu_cos_zenith = np.cos(nu.dir.zenith)
             nu_p_int = weight_dict['TotalInteractionProbabilityWeight']
             nu_unit = I3Units.cm2/I3Units.m2
             nu_weight = nu_p_int*(flux(nu.type, nu.energy, nu_cos_zenith)/nu_unit)/generator(nu.energy, nu.type, nu_cos_zenith)
+
+            muon_losses.append(loss_tuples)
             weights.append(nu_weight)
+            muon_checkpoints.append(checkpoints)
 
             mu_info.append((muon_p.energy, muon_p.pos.x, muon_p.pos.y, muon_p.pos.z, muon_p.dir.zenith, muon_p.dir.azimuth, muon_p.length))
             nu_info.append((nu.energy, nu.pos.x, nu.pos.y, nu.pos.z, nu.dir.zenith, nu.dir.azimuth, nu.length))
 
-            # Store information as pickle
-
-            for loss in losses:
-                HighEMuonLosses.append(loss)
-            frame['Primary'] = Tree_parent(muon_track.particle)
-            frame['Track'] = HighEMuonTracks
-            frame['Losses'] = HighEMuonLosses
-            self.PushFrame(frame)
+            run_id.append(header.run_id)
+            event_id.append(header.event_id)
+            
+            #for loss in losses:
+            #    HighEMuonLosses.append(loss)
+            #frame['Primary'] = Tree_parent(muon_track.particle)
+            #frame['Track'] = HighEMuonTracks
+            #frame['Losses'] = HighEMuonLosses
+            
+        #self.PushFrame(frame)
 
 infiles = get_infiles(indirs, outdir)
 
@@ -224,6 +244,8 @@ while(len(infiles)):
         pickle.dump(muon_checkpoints, outpickle, -1)
         pickle.dump(mu_info, outpickle, -1)
         pickle.dump(nu_info, outpickle, -1)
+        pickle.dump(run_id, outpickle, -1)
+        pickle.dump(event_id, outpickle, -1)
         outpickle.close()
         
         tray.Finish()
