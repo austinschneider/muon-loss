@@ -288,7 +288,7 @@ def plot(hists, dist_bins, points_labels, plotdir):
 
         error_of_mean_by_bin = hist.get_y_stddev_of_mean()
 
-        #alt_err = np.where(y < error_of_mean_by_bin, 0, error_of_mean_by_bin)
+        alt_err = np.where(y < error_of_mean_by_bin, 0, error_of_mean_by_bin)
 
         plt.errorbar(x, y, fmt=color+'.', label=label, yerr=[alt_err, error_of_mean_by_bin])
         try:
@@ -372,6 +372,9 @@ def add_points(losses, weights, checkpoints, mu_info, points_functions, hists, E
 
         if max_range - min_range < max(E_bins):
             continue
+
+        #if get_energy(min_range + max(E_bins), new_cps, loss_tuples, has_sum=True, inclusive=False) < 1000:
+        #    continue
 
         # Keep track of losses not covered already
         next_losses = [loss for loss in sorted(loss_tuples, key=_get1) if loss[1] >= min_range and loss[1] <= max_range]
