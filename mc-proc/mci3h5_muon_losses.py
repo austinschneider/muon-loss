@@ -105,8 +105,8 @@ sim_vol_bottom = -sim_vol_top
 
 is_in_sim_vol = lambda pos: (pos.z < sim_vol_top and pos.z > sim_vol_bottom and pos.rho < sim_vol_radius)
 
-#generator = from_simprod(11374)
-generator = from_simprod(10602)
+generator = from_simprod(11374)
+#generator = from_simprod(10602)
 
 # Store 3 kinds of particles
 #   Primary neutrino
