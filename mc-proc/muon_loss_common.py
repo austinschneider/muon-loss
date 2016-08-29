@@ -9,6 +9,7 @@ from icecube import dataclasses
 import os
 import pickle
 import cPickle
+import json
 import glob
 import argparse
 import itertools
@@ -61,6 +62,44 @@ muon_p_dir_zenith = 4
 muon_p_dir_azimuth = 5
 muon_p_length = 6
 
+def add_losses_to_frame(frame, losses, has_sum=True):
+    loss_e = [loss[0] for loss in losses]
+    loss_dist = [loss[1] for loss in losses]
+    loss_type = [int(loss[2]) for loss in losses]
+    if has_sum:
+        loss_sum = [loss[3] for loss in losses]
+
+    frame['MELLossesE'] = dataclasses.I3VectorDouble(loss_e)
+    frame['MELLossesDist'] = dataclasses.I3VectorDouble(loss_dist)
+    frame['MELLossesType'] = dataclasses.I3VectorInt(loss_type)
+    if has_sum:
+        frame['MELLossesSum'] = dataclasses.I3VectorDouble(loss_sum)
+
+def get_losses_from_frame(frame, has_sum=True):
+    losses = []
+    if has_sum:
+        iterator = itertools.izip(frame['MELLossesE'], frame['MELLossesDist'], frame['MELLossesType'], frame['MELLossesSum'])
+        for e, dist, type, sum in iterator:
+            losses.append((e, dist, type, sum))
+    else:
+        iterator = itertools.izip(frame['MELLossesE'], frame['MELLossesDist'], frame['MELLossesType'])
+        for e, dist, type in iterator:
+            losses.append((e, dist, type))
+    return tuple(losses)
+
+def add_checkpoints_to_frame(frame, checkpoints):
+    cps_e = [cp[0] for cp in checkpoints]
+    cps_dist = [cp[1] for cp in checkpoints]
+    frame['MELCheckpointsE'] = dataclasses.I3VectorDouble(cps_e)
+    frame['MELCheckpointsDist'] = dataclasses.I3VectorDouble(cps_dist)
+
+def get_checkpoints_from_frame(frame):
+    checkpoints = []
+    iterator = itertools.izip(frame['MELCheckpointsE'], frame['MELCheckpointsDist'])
+    for e, dist in iterator:
+        checkpoints.append((e, dist))
+    return tuple(checkpoints)
+
 def get_is_in_sim_vol(sim_vol_length=1600, sim_vol_radius=800):
     sim_vol_top = sim_vol_length / 2
     sim_vol_bottom = -sim_vol_top
@@ -69,7 +108,12 @@ def get_is_in_sim_vol(sim_vol_length=1600, sim_vol_radius=800):
 
 class histogram_nd(object):
     """ Histogram class for creating weighted average plot """
-    def __init__(self, n, bins, store_data=False):
+    def __init__(self, n, bins, store_data=False, internals=None):
+        if internals is not None:
+            for key in internals.keys():
+                setattr(self, key, internals[key])
+            return
+
         self.n = n
         self.bins = np.array(bins)
         self.size = len(bins) - 1
@@ -81,7 +125,7 @@ class histogram_nd(object):
         self.y_weighted = np.zeros((n, size))
         self.x2_weighted = np.zeros(size)
         self.y2_weighted = np.zeros((n, size))
-        
+
         if self.store_data:
             self.x_data = []
             self.y_data = np.zeros((n, 0)).tolist()
@@ -92,7 +136,10 @@ class histogram_nd(object):
             self.y_data = None
             self.bin_data = None
             self.weights_data = None
-    
+
+    def get_internals(self):
+        return self.__dict__
+
     def add(self, x, y, weights, bin=None):
         if self.store_data:
             if len(y) != len(self.y_data):
@@ -105,7 +152,7 @@ class histogram_nd(object):
                 self.bin_data += bin
             else:
                 self.bin_data += ([None]*len(y))
-        
+
         x = np.array(x)
         y = np.array(y)
         weights = np.array(weights)
@@ -147,21 +194,20 @@ class histogram_nd(object):
         if not hist.n == self.n:
             raise ValueError("Histogram must have same dimension")
         same_shape = (self.weights.shape == hist.weights.shape and
-            self.weights2.shape == hist.weights2.shape and
-            self.x_weighted.shape == hist.x_weighted.shape and
-            self.y_weighted.shape == hist.y_weighted.shape and
-            self.x2_weighted.shape == hist.x2_weighted.shape and
-            self.y2_weighted.shape == hist.y2_weighted.shape)
+                self.weights2.shape == hist.weights2.shape and
+                self.x_weighted.shape == hist.x_weighted.shape and
+                self.y_weighted.shape == hist.y_weighted.shape and
+                self.x2_weighted.shape == hist.x2_weighted.shape and
+                self.y2_weighted.shape == hist.y2_weighted.shape)
         if not same_shape:
             raise ValueError("Histogram shapes are not the same")
-        
+
         self.weights += hist.weights
         self.weights2 += hist.weights2
         self.x_weighted += hist.x_weighted
         self.y_weighted += hist.y_weighted
         self.x2_weighted += hist.x2_weighted
         self.y2_weighted += hist.y2_weighted
-
 
     def get_w(self):
         w = self.weights[:]
@@ -212,6 +258,10 @@ class histogram(histogram_nd):
         return super(histogram, self).get_y_stddev()[0]
     def get_y_stddev_of_mean(self):
         return self.get_y_stddev() * np.sqrt(self.get_w2()) / self.get_w()
+
+def write_hist_to_file(file_handle, hist):
+    internals = hist.get_internals()
+
 
 def get_valid_checkpoints(cps):
     """
@@ -309,7 +359,7 @@ def get_energy(x, checkpoints, loss_tuples, inclusive=True, has_sum=True):
 
     # Get the loss rate and losses between the checkpoints
     loss_rate, losses = get_loss_info((cp1, cp2, loss_tuples, has_sum))
-    
+
     # Get the sum of losses between x and the checkpoint before x
     if inclusive:
         if has_sum:

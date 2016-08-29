@@ -37,11 +37,11 @@ parser.add_argument('-r', '--range', default='')
 
 args = parser.parse_args()
 indirs = args.indirs
-outfile = args.outfile
-infile = args.infile
-plotdir = args.plotdir
+outfile = args.outfile.translate(None, '"\'')
+infile = args.infile.translate(None, '"\'')
+plotdir = args.plotdir.translate(None, '"\'')
 aggregate = args.aggregate
-range = args.range
+range = args.range.translate(None, '\\/:!@#$%Z^&*()+=`;"\'?><,|{}_ ')
 if range == '':
     range = None
 else:
@@ -101,7 +101,8 @@ def plot(hists, dist_bins, points_labels, plotdir, split=False):
 
     colors = ['b', 'g', 'm', 'c']
     
-    fig = plt.figure()
+    #fig = plt.figure()
+    fig, ax = plt.subplots(1)
 
     for hist,label,color in itertools.izip(hists, points_labels, colors):
         print(label)
@@ -164,13 +165,19 @@ def plot(hists, dist_bins, points_labels, plotdir, split=False):
 
         b = fit_for_b(dist_bins, x, y, error_of_mean_by_bin)
 
-        print('L=%f' % (1.0/b))
+        L = 1.0/b
+
+        print('L=%f' % (L))
 
         plt.plot(x, fit_func(x, b), 'r')
     
         #line = lambda x: 0.259*0.917+0.363*10**(-3)*0.917*x
         #plt.plot(x,line(x), 'r.', linewidth=2.0, label='Expected total losses')
         #plt.axis([1, 10**6, 10**(-4), 10**4])
+
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+        ax.text(0.70, 0.1, "L=%.03f (m)" % L, fontsize=14, transform=ax.transAxes, verticalalignment='top', bbox=props)
+
         plt.legend(loc=3)
         plt.xlabel('Track Distance (m)')
         plt.ylabel('Fractional Energy Loss')
@@ -241,9 +248,6 @@ def add_points(losses, weights, checkpoints, mu_info, points_functions, hists, E
         #if get_energy(min_range + max(E_bins), new_cps, loss_tuples, has_sum=True, inclusive=False) < 1000:
         #    continue
 
-        # Keep track of losses not covered already
-        next_losses = [loss for loss in sorted(loss_tuples, key=_get1) if loss[1] >= min_range and loss[1] <= max_range]
-        
         # Convert to tuple for memoization
         loss_tuples = tuple(loss_tuples)
 
@@ -252,27 +256,21 @@ def add_points(losses, weights, checkpoints, mu_info, points_functions, hists, E
                 x1 += min_range
                 x2 += min_range
                 if(x1 > max_range):
-                    x = x1
-                    dE = 0
+                    continue
                 else:
                     if(x2 > max_range):
                         x2 = max_range
                     x, dE = points_functions[i]((x1, x2, new_cps, loss_tuples))
-                #print(x, dE)
                 point_x[i].append(x)
                 point_dE[i].append(dE)
                 point_weight[i].append(weight)
-                #point_weight[i].append(1e-5)
-                #if(x2 == max_range):
-                #    break
             total_dE = sum(point_dE[i])
             if(total_dE == 0):
                 continue
             point_frac_dE[i] = [dE / total_dE for dE in point_dE[i]]
             point_x[i] = [x - min_range for x in point_x[i]]
 
-            track_stuff = hists[i].add(point_x[i], [point_frac_dE[i], point_dE[i], [total_dE]*len(point_dE[i])], point_weight[i])
-            bs[i].append(fit_for_b_(hists[i].bins, track_stuff))
+            hists[i].add(point_x[i], [point_frac_dE[i], point_dE[i], [total_dE]*len(point_dE[i])], point_weight[i])
 
         n_muons += 1
 
@@ -380,7 +378,7 @@ dist_bins = np.linspace(0, 600, 10+1)
 if plotdir != '' or outfile != '':
     if len(infile) == 0 and len(indirs) > 0:
         if aggregate:
-            hists, dist_bins = mlc.aggregate_hists_from_dirs(dirs)
+            hists, dist_bins = mlc.aggregate_info_from_dirs(indirs)
         else:
             hists = get_hists_from_dirs(indirs, dist_bins, points_functions, range)
         if outfile != '':
@@ -390,5 +388,4 @@ if plotdir != '' or outfile != '':
     if outfile != '':
         mlc.save_info_to_file(outfile, hists, dist_bins)
     if plotdir != '':
-        plot_dEdx(hists, dist_bins, points_labels, plotdir, split=False)
-        #plot_dEdx(hists, E_bins, points_labels, plotdir, split=True)
+        plot(hists, dist_bins, points_labels, plotdir, split=False)

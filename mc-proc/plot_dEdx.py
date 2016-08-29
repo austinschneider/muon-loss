@@ -301,7 +301,7 @@ def add_E_dEdx_points(losses, weights, checkpoints, mu_info, points_functions, h
                         point_Ex[i].append(Ex)
                         point_weight[i].append(weight)
                         point_bin[i].append(Ei)
-                
+ 
             except:
                 print("####")
                 print("Checkpoints:")
