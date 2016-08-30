@@ -16,6 +16,7 @@ import itertools
 import re
 import operator as op
 
+import threaded
 
 # Define fucntion to get item from list or tuple
 _get0 = op.itemgetter(0)
@@ -291,7 +292,7 @@ def add_loss_sum(losses, checkpoints):
         losses[j] = tuple(list(losses[j]) + [total])
     return tuple(losses)
 
-def get_track_range(cps):                                                                                                                                                                                   
+def get_track_range(cps):
     """ 
     Takes list of checkpoints
     Returns range of track inside simulation volume
@@ -436,3 +437,20 @@ def save_info_to_file(outfile, hists, bins):
     pickle.dump(bins, outpickle, -1)
 
     outpickle.close()
+
+def read_from_json_file(file):
+    return json.load(file)
+
+def read_from_pkl_file(file):
+    return pickle.load(file)
+
+def make_file_reader(file_name):
+    if file_name.endswith('.pkl'):
+        read = read_from_pkl_file
+    elif file_name.endswith('.json'):
+        read = read_from_json_file
+    else:
+        raise ValueError('No match for file extension!')
+
+    return threaded.scratch_reader(file_name, read)
+
