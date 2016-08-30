@@ -131,6 +131,8 @@ class file_reader:
         self.sleep_period = sleep_period
         self.buffer
         self.thread.start()
+    def __iter__(self):
+        return self
     def read(self):
         while len(self.buffer) == 0:
             self.thread.lock.acquire()
@@ -177,6 +179,8 @@ class scratch_reader:
         self.scratch_file = open(self.scratch_file_name, 'r')
         self.reader = file_reader(self.scratch_file, read, sleep_period, max_buffer)
         self.file_name = file_name
+    def __iter__(self):
+        return self
     def read(self):
         return self.reader.read()
     def join(self):
