@@ -452,5 +452,17 @@ def make_file_reader(file_name):
     else:
         raise ValueError('No match for file extension!')
 
-    return threaded.scratch_reader(file_name, read)
+    scratch_dir = '/scratch/%s/' % os.environ['USER']
+    if os.path.exists('/scratch/'):
+        if not os.path.exists(scratch_dir):
+            try:
+                os.makedir(scratch_dir)
+            except:
+                pass
+    if os.path.exists(scratch_dir):
+        reader = threaded.scratch_reader
+    else:
+        reader = threaded.file_reader
+
+    return reader(file_name, read)
 
