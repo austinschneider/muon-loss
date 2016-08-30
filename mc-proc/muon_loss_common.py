@@ -439,7 +439,7 @@ def save_info_to_file(outfile, hists, bins):
     outpickle.close()
 
 def read_from_json_file(file):
-    return json.load(file)
+    return json.loads(file.readline())
 
 def read_from_pkl_file(file):
     return pickle.load(file)

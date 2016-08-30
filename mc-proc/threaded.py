@@ -7,6 +7,9 @@ import threading
 import collections
 
 class buffered_task_thread(threading.Thread):
+    """
+    Thread to perform work on data in buffer
+    """
     def __init__(self, task, sleep_period=0.1):
         threading.Thread.__init__(self)
         self.task = task
@@ -33,6 +36,9 @@ class buffered_task_thread(threading.Thread):
                 time.sleep(self.sleep_period)
 
 class buffered_task:
+    """
+    Class to encapsulate thread instance and handle locking on data
+    """
     def __init__(self, task, sleep_period=0.1, max_data=None):
         self.thread = buffered_task_thread(task, sleep_period=sleep_period)
         self.max_data = max_data
@@ -56,6 +62,10 @@ class buffered_task:
         self.thread.join()
 
 class file_writer_thread(threading.Thread):
+    """
+    Thread for writing data to file
+    Write method should accept list of data
+    """
     def __init__(self, file, write, sleep_period=0.1):
         threading.Thread.__init__(self)
         self.file = file
@@ -82,7 +92,12 @@ class file_writer_thread(threading.Thread):
             time.sleep(self.sleep_period)
 
 class file_reader_thread(threading.Thread):
+    """
+    Thread for reading data from file
+    Read method should return list of data
+    """
     def __init__(self, file, read, sleep_period=0.1, buffer_max = 100000):
+        threading.Thread.__init__(self)
         self.file = file
         self.read = read
         self.buffer = []
@@ -114,6 +129,11 @@ class file_reader_thread(threading.Thread):
                 return
 
 class file_writer:
+    """
+    Threaded file writer
+    Class to encapsulate thread instance and handle locking on data
+    Write method should accept list of data
+    """
     def __init__(self, file, write, sleep_period=0.1):
         self.thread = file_writer_thread(file, write, sleep_period)
         self.thread.start()
@@ -126,10 +146,16 @@ class file_writer:
         self.thread.join()
 
 class file_reader:
-    def __init__(self, file, write, sleep_period=0.1, max_buffer=100000):
+    """
+    Threaded file reader
+    Class to encapsulate thread instance and handle locking on data
+    Read method should return list of data
+    """
+    def __init__(self, file, read, sleep_period=0.1, max_buffer=100000):
         self.thread = file_reader_thread(file, read, sleep_period, max_buffer)
         self.sleep_period = sleep_period
-        self.buffer
+        self.buffer = []
+        self.n = 0
         self.thread.start()
     def __iter__(self):
         return self
@@ -140,19 +166,29 @@ class file_reader:
                 self.buffer = self.thread.buffer
                 self.thread.buffer = []
             elif self.thread.stop:
-                self.thread.release()
+                self.thread.lock.release()
                 raise ValueError('No items left')
-            self.thread.release()
+            else:
+                self.thread.lock.release()
+                time.sleep(self.sleep_period)
+                continue
+            self.thread.lock.release()
             self.buffer.reverse()
-        
+        self.n += 1
         return self.buffer.pop()
     def next(self):
         try:
             return self.read()
         except:
+            print "Read %d items!" % self.n
             raise StopIteration()
 
 class scratch_writer:
+    """
+    Threaded file writer that writes to scratch and then copies to destination
+    Class to encapsulate thread instance and handle locking on data
+    Write method should accept list of data
+    """
     def __init__(self, file_name, write, sleep_period=0.1):
         scratch_dir = '/scratch/%s/' % os.environ['USER']
         if not os.path.exists(scratch_dir):
@@ -170,19 +206,29 @@ class scratch_writer:
         os.remove(self.scratch_file_name)
 
 class scratch_reader:
+    """
+    Threaded file reader that copies file to scratch before reading
+    Class to encapsulate thread instance and handle locking on data
+    Read method should return list of data
+    """
     def __init__(self, file_name, read, sleep_period=0.1, max_buffer=100000):
         scratch_dir = '/scratch/%s/' % os.environ['USER']
         if not os.path.exists(scratch_dir):
             os.makedir(scratch_dir)
         self.scratch_file_name = scratch_dir + str(uuid.uuid4())
+        self.file_name = file_name
         shutil.copy(self.file_name, self.scratch_file_name)
         self.scratch_file = open(self.scratch_file_name, 'r')
         self.reader = file_reader(self.scratch_file, read, sleep_period, max_buffer)
-        self.file_name = file_name
     def __iter__(self):
         return self
     def read(self):
         return self.reader.read()
+    def next(self):
+        try:
+            return self.reader.next()
+        except:
+            raise StopIteration()
     def join(self):
         self.writer.join()
         self.scratch_file.close()
