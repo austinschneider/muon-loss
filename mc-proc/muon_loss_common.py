@@ -15,6 +15,9 @@ import argparse
 import itertools
 import re
 import operator as op
+import uuid
+import shutil
+import Queue
 
 import threaded
 
@@ -64,6 +67,9 @@ muon_p_dir_azimuth = 5
 muon_p_length = 6
 
 def add_losses_to_frame(frame, losses, has_sum=True):
+    """
+    Add loss information in a frame
+    """
     loss_e = [loss[0] for loss in losses]
     loss_dist = [loss[1] for loss in losses]
     loss_type = [int(loss[2]) for loss in losses]
@@ -77,6 +83,9 @@ def add_losses_to_frame(frame, losses, has_sum=True):
         frame['MELLossesSum'] = dataclasses.I3VectorDouble(loss_sum)
 
 def get_losses_from_frame(frame, has_sum=True):
+    """
+    Get loss information from a frame
+    """
     losses = []
     if has_sum:
         iterator = itertools.izip(frame['MELLossesE'], frame['MELLossesDist'], frame['MELLossesType'], frame['MELLossesSum'])
@@ -89,12 +98,18 @@ def get_losses_from_frame(frame, has_sum=True):
     return tuple(losses)
 
 def add_checkpoints_to_frame(frame, checkpoints):
+    """
+    Add energy checkpoint information to a frame
+    """
     cps_e = [cp[0] for cp in checkpoints]
     cps_dist = [cp[1] for cp in checkpoints]
     frame['MELCheckpointsE'] = dataclasses.I3VectorDouble(cps_e)
     frame['MELCheckpointsDist'] = dataclasses.I3VectorDouble(cps_dist)
 
 def get_checkpoints_from_frame(frame):
+    """
+    Get energy checkpoint information from a frame
+    """
     checkpoints = []
     iterator = itertools.izip(frame['MELCheckpointsE'], frame['MELCheckpointsDist'])
     for e, dist in iterator:
@@ -102,10 +117,20 @@ def get_checkpoints_from_frame(frame):
     return tuple(checkpoints)
 
 def get_is_in_sim_vol(sim_vol_length=1600, sim_vol_radius=800):
+    """
+    Get a lambda function that determines if a muon is in the simulation volume
+    """
     sim_vol_top = sim_vol_length / 2
     sim_vol_bottom = -sim_vol_top
     is_in_sim_vol = lambda m,top=sim_vol_top,bot=sim_vol_bottom,r=sim_vol_radius,x=muon_p_pos_x,y=muon_p_pos_y,z=muon_p_pos_z: (m[z] < top and m[z] > bot and (m[x]**2 + m[y]**2)**(0.5) < r)
     return is_in_sim_vol
+
+class histogram_bundle(object):
+    def __init__(self, hists=[]):
+        self.hists = hists
+    def accumulate(self, hb):
+        for h0, h1 in itertools.izip(self.hists, hb.hists):
+            h0.accumulate(h1)
 
 class histogram_nd(object):
     """ Histogram class for creating weighted average plot """
@@ -263,6 +288,34 @@ class histogram(histogram_nd):
 def write_hist_to_file(file_handle, hist):
     internals = hist.get_internals()
 
+class muon(object):
+    def __init__(self, checkpoints, losses, weight, mu_info, nu_info, run_id, event_id):
+        self.checkpoints = tuple([tuple(cp) for cp in checkpoints])
+        self.losses = tuple([tuple(loss) for loss in losses])
+        self.mu_info = mu_info
+        self.nu_info = nu_info
+        self.run_id = run_id
+        self.event_id = event_id
+        self.valid_checkpoints = get_valid_checkpoints(self.checkpoints)
+        self.enum_vcp = [e for e in enumerate(self.valid_checkpoints)]
+        self.losses = add_loss_sum(self.losses, self.valid_checkpoints)
+        self.min_range, self.max_range = get_track_range(self.checkpoints)
+        self.loss_infos = [get_loss_info_(cp1, cp2, self.losses) for cp1, cp2 in itertools.izip(self.valid_checkpoints[:-1], self.valid_checkpoints[1:])]
+
+    def get_loss_info(self, x):
+        bounds = get_bouning_elements(x, self.enum_vcp, lambda elem: elem[1][1])
+        cp1 = bounds[0][1]
+        cp2 = bounds[1][1]
+        if cp1 is not None and cp2 is not None:
+            loss_info = self.loss_infos[bounds[0][0]]
+        else:
+            loss_info = [None, None]
+
+        return cp1,cp2,loss_info
+
+    def get_energy(self, x, inclusive=True):
+        cp1, cp2, loss_info = self.get_loss_info(x)
+        return get_energy__(cp1, cp2, loss_info[0], loss_info[1], inclusive=inclusive, has_sum=True)
 
 def get_valid_checkpoints(cps):
     """
@@ -311,12 +364,16 @@ def get_track_range(cps):
 
 @memodict
 def get_loss_info(stuff):
+    cp1, cp2, losses, has_sum = stuff
+    return get_loss_info_(cp1, cp2, losses, has_sum)
+
+def get_loss_info_(cp1, cp2, losses, has_sum):
     """
     Get the loss rate and losses between two energy checkpoints.
     Takes single tuple argument (checkpoint1, checkpoint2, losses) to allow fast memoization.
     A checkpoint has the structure: (energy, distance along track)
     """
-    cp1, cp2, losses, has_sum = stuff
+    #cp1, cp2, losses, has_sum = stuff
     losses = sorted(losses, key=_get1) # Sort by distance 
     losses = [l for l in losses if (l[1] > cp1[1]) and (l[1] < cp2[1])]
 
@@ -339,8 +396,13 @@ def get_bounding_elements(x, l, key=lambda elem: elem, sort=False):
         l = sorted(l, key=key)
     return (next(itertools.dropwhile(lambda elem: key(elem) > x, reversed(l)), None),
             next(itertools.dropwhile(lambda elem: key(elem) < x, l), None))
-
 def get_energy(x, checkpoints, loss_tuples, inclusive=True, has_sum=True):
+    stuff = (x, checkpoints, loss_tuples, inclusive, has_sum)
+    return get_energy_(stuff)
+
+@memodict
+def get_energy_(stuff):
+    x, checkpoints, loss_tuples, inclusive, has_sum = stuff
     """
     Get the energy of a muon track at a point x.
     Given energy checkpoints and losses along track.
@@ -386,6 +448,46 @@ def get_energy(x, checkpoints, loss_tuples, inclusive=True, has_sum=True):
 
     return energy
 
+def get_energy__(x, cp1, cp2, loss_rate, losses, inclusive, has_sum):
+    """
+    Get the energy of a muon track at a point x.
+    Given energy checkpoints and losses along track.
+    """
+    # If the checkpoints are the same then x has the same distance as the checkpoint
+    if cp1 == cp2:
+        return cp1[0]
+
+    # Return 0 for regions in which we don't have enough information
+    if not cp1:
+        return 0
+    if not cp2:
+        return 0
+
+    # Get the sum of losses between x and the checkpoint before x
+    if inclusive:
+        if has_sum:
+            i_loss_before_x = next(itertools.dropwhile(lambda loss: loss[1][1] <= x, enumerate(losses)), [len(losses)])[0] - 1
+            if i_loss_before_x < 0:
+                stoch_loss_since_cp1 = 0
+            else:
+                stoch_loss_since_cp1 = losses[i_loss_before_x][3]
+        else:
+            stoch_loss_since_cp1 = sum([l[0] for l in losses if l[1] <= x])
+    else:
+        if has_sum:
+            i_loss_before_x = next(itertools.dropwhile(lambda loss: loss[1][1] < x, enumerate(losses)), [len(losses)])[0] - 1
+            if i_loss_before_x < 0:
+                stoch_loss_since_cp1 = 0
+            else:
+                stoch_loss_since_cp1 = losses[i_loss_before_x][3]
+        else:
+            stoch_loss_since_cp1 = sum([l[0] for l in losses if l[1] < x])
+
+    # (E at last cp) - (stoch losses since last cp) - (loss rate * distance from last cp)
+    energy = cp1[0] - stoch_loss_since_cp1 - (x - cp1[1]) * loss_rate
+
+    return energy
+
 def integrate_track_energy(x1, x2, checkpoints, loss_tuples, has_sum=True):
     """
     Integrate the track energy between two points
@@ -405,51 +507,74 @@ def integrate_track_energy(x1, x2, checkpoints, loss_tuples, has_sum=True):
     return area
 
 def get_info_from_file(infile):
+    """
+    Get histogram and binning information from a pickle file
+    """
     inpickle = open(infile, 'rb')
     hists = pickle.load(inpickle)
-    bins = pickle.load(inpickle)
+    binnings = pickle.load(inpickle)
 
     inpickle.close()
 
-    return (hists, bins)
+    return (hists, binnings)
 
 def aggregate_info_from_dirs(dirs):
+    """
+    Aggregate information from multiple files
+    """
     aggregated_hists = None
-    aggregated_bins = None
+    aggregated_binnings = None
     for dir in dirs:
         files = glob.glob(dir + "*.pkl")
         for file in files:
-            hists, bins = get_info_from_file(file)
+            hists, binnings = get_info_from_file(file)
             if aggregated_hists is None:
                 aggregated_hists = hists
-                aggregated_bins = bins
+                aggregated_binnings = binnings
             else:
-                if (aggregated_bins == bins).all() and len(hists) == len(aggregated_hists):
+                if (aggregated_binnings == binnings).all() and len(hists) == len(aggregated_hists):
                     for i in xrange(len(hists)):
                         aggregated_hists[i].accumulate(hists[i])
                 else:
-                    raise ValueError("Histograms must match!")
-    return aggregated_hists, aggregated_bins
+                    raise ValueError("Histograms and binnings must match!")
+    return aggregated_hists
 
-def save_info_to_file(outfile, hists, bins):
+def save_info_to_file(outfile, hists, binnings):
+    """
+    Save histogram and binning information to a pickle file
+    """
     outpickle = open(outfile, 'wb')
     pickle.dump(hists, outpickle, -1)
-    pickle.dump(bins, outpickle, -1)
+    pickle.dump(binnings, outpickle, -1)
 
     outpickle.close()
 
 def read_from_json_file(file):
+    """
+    Read function for json files
+    """
     return json.loads(file.readline())
 
 def read_from_pkl_file(file):
+    """
+    Read function for pkl files
+    """
     return pickle.load(file)
 
-def make_file_reader(file_name):
+def write_to_json_file(f, obj):
+    json.dump(obj, f, check_circular=False)
+    f.write('\n')
+
+def write_to_pkl_file(f, obj):
+    pickle.dump(obj, f, -1)
+
+def file_writer(file_name, q):
     if file_name.endswith('.pkl'):
-        read = read_from_pkl_file
+        write = write_to_pkl_file
     elif file_name.endswith('.json'):
-        read = read_from_json_file
+        write = write_to_json_file
     else:
+        print 'No match to file extension'
         raise ValueError('No match for file extension!')
 
     scratch_dir = '/scratch/%s/' % os.environ['USER']
@@ -459,10 +584,116 @@ def make_file_reader(file_name):
                 os.makedir(scratch_dir)
             except:
                 pass
-    if os.path.exists(scratch_dir):
-        reader = threaded.scratch_reader
-    else:
-        reader = threaded.file_reader
 
-    return reader(file_name, read)
+    is_scratch = os.path.exists(scratch_dir)
+    is_scratch = False
+
+    if is_scratch:
+        print 'Using scratch'
+    else:
+        print 'Not using scratch'
+    
+    if is_scratch:
+        scratch_file_name = scratch_dir + str(uuid.uuid4())
+        print file_name
+        print scratch_file_name
+        scratch_file = open(scratch_file_name, 'w')
+        print 'Opening scratch file'
+        write_file = scratch_file
+    else:
+        write_file = open(file_name, 'w')
+        print 'Opening file'
+
+    while True:
+        try:
+            elems = q.get(True, 0.1)                                                                                                                                             
+            if elems is Queue.Empty:
+                print 'Ending writer thread'
+                write_file.close()
+                if is_scratch:
+                    print shutil.move(scratch_file_name, file_name)
+                return
+            elems.reverse()
+            write(write_file, elems)
+        except Queue.Empty as e:
+            print 'Empty'
+            pass
+        except Exception as e:
+            print 'Got other exception'
+            print e
+            raise
+
+def file_reader(file_name, q):
+    """
+    Make a file reader based on file extension and /scratch/$USER/ availability
+    """
+    #print 'In file reader thread'
+    if file_name.endswith('.pkl'):
+        read = read_from_pkl_file
+        print 'Got a pkl file!'
+    elif file_name.endswith('.json'):
+        #read = read_from_json_file
+        read = lambda f: f.readline()
+        print 'Got a json file!'
+    else:
+        raise ValueError('No match for file extension!')
+
+    print 'Good file extension'
+
+    scratch_dir = '/scratch/%s/' % os.environ['USER']
+    if os.path.exists('/scratch/'):
+        if not os.path.exists(scratch_dir):
+            try:
+                os.makedir(scratch_dir)
+            except:
+                pass
+
+    is_scratch = os.path.exists(scratch_dir)
+    is_scratch = is_scratch and os.stat(file_name).st_size <= 1024**3 * 10
+
+    print 'Is scratch: %d' % is_scratch
+
+    if is_scratch:
+        scratch_file_name = scratch_dir + str(uuid.uuid4())
+        print file_name
+        print scratch_file_name
+        print shutil.copy(file_name, scratch_file_name)
+        scratch_file = open(scratch_file_name, 'r')
+        read_file = scratch_file
+    else:
+        print file_name
+        read_file = open(file_name, 'r')
+
+    #print 'Got file!'
+
+    stop = False
+    #chunk = 1000
+    elems = []
+    while True:
+        try:
+            #print 'Trying to read'
+            elems = read(read_file)
+            if elems == '':
+                q.put(elems)
+                raise ValueError('Nothing left in file')
+            print 'Read'
+            #while len(elems) >= chunk:
+            print 'Trying to put'
+            q.put(elems)
+            print 'Put'
+            #elems = []
+        except Exception as e:
+            print 'Got exception: %s' % str(e)
+            print 'Issue reading more from file'
+            #q.put(elems)
+            #stop = True
+            #print  'Putting Empty'
+            #q.put(Queue.Empty)
+            #print  'Put Empty'
+            print 'Ending reader thread'
+            if is_scratch:
+                os.remove(scratch_file_name)
+            return
+   
+ 
 
