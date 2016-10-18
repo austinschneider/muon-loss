@@ -623,10 +623,13 @@ def file_writer(file_name, q):
             print e
             raise
 
-def file_reader(file_name, q):
+def file_reader(file_name, q, max_scratch_size = 1024**3):
     """
     Make a file reader based on file extension and /scratch/$USER/ availability
     """
+
+    is_i3 = False
+
     #print 'In file reader thread'
     if file_name.endswith('.pkl'):
         read = read_from_pkl_file
@@ -635,6 +638,8 @@ def file_reader(file_name, q):
         #read = read_from_json_file
         read = lambda f: f.readline()
         print 'Got a json file!'
+    elif file_name.endswith('.i3.gz') or file_name.endswith('i3.bz2'):
+        is_i3 = True
     else:
         raise ValueError('No match for file extension!')
 
@@ -649,7 +654,7 @@ def file_reader(file_name, q):
                 pass
 
     is_scratch = os.path.exists(scratch_dir)
-    is_scratch = is_scratch and os.stat(file_name).st_size <= 1024**3 * 10
+    is_scratch = is_scratch and os.stat(file_name).st_size <= max_scratch_size
 
     print 'Is scratch: %d' % is_scratch
 
@@ -658,38 +663,30 @@ def file_reader(file_name, q):
         print file_name
         print scratch_file_name
         print shutil.copy(file_name, scratch_file_name)
-        scratch_file = open(scratch_file_name, 'r')
-        read_file = scratch_file
+        #scratch_file = open(scratch_file_name, 'r')
+        read_file_name = scratch_file_name
     else:
         print file_name
-        read_file = open(file_name, 'r')
+        read_file_name = file_name
 
-    #print 'Got file!'
+    #if is_i3:
+
 
     stop = False
-    #chunk = 1000
     elems = []
     while True:
         try:
-            #print 'Trying to read'
             elems = read(read_file)
             if elems == '':
                 q.put(elems)
                 raise ValueError('Nothing left in file')
-            print 'Read'
-            #while len(elems) >= chunk:
-            print 'Trying to put'
+            #print 'Read'
+            #print 'Trying to put'
             q.put(elems)
             print 'Put'
-            #elems = []
         except Exception as e:
             print 'Got exception: %s' % str(e)
             print 'Issue reading more from file'
-            #q.put(elems)
-            #stop = True
-            #print  'Putting Empty'
-            #q.put(Queue.Empty)
-            #print  'Put Empty'
             print 'Ending reader thread'
             if is_scratch:
                 os.remove(scratch_file_name)
