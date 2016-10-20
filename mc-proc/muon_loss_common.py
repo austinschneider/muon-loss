@@ -5,6 +5,15 @@ import matplotlib.pyplot as plt
 import scipy.optimize
 
 from icecube import dataclasses
+import icetray
+from I3Tray import *
+from icecube import icetray, dataio
+from icecube import dataclasses
+from icecube import tableio, hdfwriter
+from icecube import simclasses
+from icecube import NewNuFlux
+from icecube.icetray import I3Units
+from icecube.weighting.weighting import from_simprod
 
 import os
 import pickle
@@ -18,7 +27,7 @@ import operator as op
 import uuid
 import shutil
 import Queue
-
+import multiprocessing
 import threaded
 
 # Define fucntion to get item from list or tuple
@@ -623,11 +632,90 @@ def file_writer(file_name, q):
             print e
             raise
 
+def process_DAQ(frame, q, n, is_mono = False):
+    tree = frame['I3MCTree']
+    tracks = frame['MMCTrackList']
+    if not is_mono:
+        weight_dict = frame['I3MCWeightDict']
+        header = frame['I3EventHeader']
+        tree_parent = tree.parent
+
+    primaries = tree.primaries
+
+    tracks = [track for track in tracks if track.particle.type in mu_set] # Only tracks that are muons
+    tracks = [track for track in tracks if tree.has(track.particle)] # Only tracks in MC tree
+
+    if is_mono:
+        muon_track = max(tracks, key=lambda x: x.particle.energy)
+    else:
+        tracks = [track for track in tracks if tree_parent(track.particle).type in nu_set] # Only tracks that have nu parent
+        tracks = [track for track in tracks if tree_parent(track.particle) in primaries] # Only tracks that have primary parent
+        tracks = [track for track in tracks if track.particle.energy >= 5000] # Only muons that are at least 5TeV at creation
+
+        nu_primaries_of_tracks = np.unique([tree_parent(track.particle) for track in tracks])
+        tracks_by_primary = [[track for track in tracks if tree_parent(track.particle) == p] for p in nu_primaries_of_tracks]
+        max_E_muons_by_primary = [max(tracks_for_primary, key=self.get_energy) for tracks_for_primary in tracks_by_primary]
+        n_muons = len(max_E_muons_by_primary)
+        if(n_muons > 1):
+            raise ValueError('There is more than one muon in the frame')
+        if(n_muons < 1):
+            return
+        nu = nu_primaries_of_tracks[0]
+
+    muon_p = muon_track.particle
+    #HighEMuonTracks.append(muon_track)
+    losses = [d for d in tree.get_daughters(muon_p) if d.type in loss_set] #Get the muon daughters
+
+    # Create loss tuples
+    loss_tuples = [(loss.energy, abs(loss.pos - muon_p.pos), int(loss.type)) for loss in losses]
+
+    # Create checkpoints
+    checkpoints = [(muon_p.energy, 0)]
+
+    muon_pos_i = dataclasses.I3Position(muon_track.xi, muon_track.yi, muon_track.zi)
+    checkpoints.append((muon_track.Ei, abs(muon_pos_i - muon_p.pos)))
+
+    muon_pos_c = dataclasses.I3Position(muon_track.xc, muon_track.yc, muon_track.zc)
+    checkpoints.append((muon_track.Ec, abs(muon_pos_c - muon_p.pos)))
+
+    muon_pos_f = dataclasses.I3Position(muon_track.xf, muon_track.yf, muon_track.zf)
+    checkpoints.append((muon_track.Ef, abs(muon_pos_f - muon_p.pos)))
+
+    checkpoints.append((0, muon_p.length))
+
+    # Calculate weights
+    if is_mono:
+        nu_weight = 1e-5
+    else:
+        nu_cos_zenith = np.cos(nu.dir.zenith)
+        nu_p_int = weight_dict['TotalInteractionProbabilityWeight']
+        nu_unit = I3Units.cm2/I3Units.m2
+        nu_weight = nu_p_int*(flux(nu.type, nu.energy, nu_cos_zenith)/nu_unit)/generator(nu.energy, nu.type, nu_cos_zenith)
+
+    data = []
+
+    data.append(loss_tuples)
+    data.append(nu_weight)
+    data.append(checkpoints)
+
+    data.append((muon_p.energy, muon_p.pos.x, muon_p.pos.y, muon_p.pos.z, muon_p.dir.zenith, muon_p.dir.azimuth, muon_p.length))
+    if is_mono:
+        data.append((0, 0, 0, 0, 0, 0, 0))
+        data.append(0)
+        data.append(n)
+    else:
+        data.append((nu.energy, nu.pos.x, nu.pos.y, nu.pos.z, nu.dir.zenith, nu.dir.azimuth, nu.length))
+        data.append(header.run_id)
+        data.append(header.event_id)
+
+    q.put([data])
+
+
 def file_reader(file_name, q, max_scratch_size = 1024**3):
     """
     Make a file reader based on file extension and /scratch/$USER/ availability
     """
-
+    max_i3_processes
     is_i3 = False
 
     #print 'In file reader thread'
@@ -663,34 +751,53 @@ def file_reader(file_name, q, max_scratch_size = 1024**3):
         print file_name
         print scratch_file_name
         print shutil.copy(file_name, scratch_file_name)
-        #scratch_file = open(scratch_file_name, 'r')
         read_file_name = scratch_file_name
     else:
         print file_name
         read_file_name = file_name
 
-    #if is_i3:
-
-
-    stop = False
-    elems = []
-    while True:
-        try:
-            elems = read(read_file)
-            if elems == '':
+    if is_i3:
+        is_mono = 'mono' in file_name
+        pool = multiprocessing.Pool(2, maxtasksperchild=100)
+        class MCMuonInfoTray(icetray.I3ConditionalModule):
+            def __init__(self, context):
+                super(MyModule, self).__init__(context)
+                self.n = None
+            def Configure(self):
+                pass
+            def Physics(self, frame):
+                pass
+            def DAQ(self, frame):
+                if self.n == None:
+                    self.n = 0
+                else:
+                    self.n += 1
+                result = pool.apply_async(process_DAQ, (frame, q, self.n, is_mono))
+        tray = I3Tray()
+        tray.Add("I3Reader", "my_reader", FilenameList=[read_file_name])
+        tray.Add(lambda frame: frame.Has('I3MCTree'))
+        tray.Add(lambda frame: frame.Has('MMCTrackList'))
+        tray.Add(MCMuonInfoTray)
+        tray.Execute()
+        tray.Finish()
+        pool.close()
+        pool.join()
+        q.put(Queue.Empty)
+    else:
+        stop = False
+        elems = []
+        while True:
+            try:
+                elems = read(read_file)
+                if elems == '':
+                    q.put(elems)
+                    raise ValueError('Nothing left in file')
                 q.put(elems)
-                raise ValueError('Nothing left in file')
-            #print 'Read'
-            #print 'Trying to put'
-            q.put(elems)
-            print 'Put'
-        except Exception as e:
-            print 'Got exception: %s' % str(e)
-            print 'Issue reading more from file'
-            print 'Ending reader thread'
-            if is_scratch:
-                os.remove(scratch_file_name)
-            return
-   
- 
-
+                print 'Put'
+            except Exception as e:
+                print 'Got exception: %s' % str(e)
+                print 'Issue reading more from file'
+                print 'Ending reader thread'
+                if is_scratch:
+                    os.remove(scratch_file_name)
+                return
