@@ -801,3 +801,85 @@ def file_reader(file_name, q, max_scratch_size = 1024**3):
                 if is_scratch:
                     os.remove(scratch_file_name)
                 return
+
+def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
+    print 'In thread!'
+    elems = []
+    done = False
+    n_good = 0
+    n_bad = 0
+    try:
+        while True:
+            if len(elems) == 0:
+                try:
+                    elems_string = q.get(True, 1)
+                    if type(elems_string) is list:
+                        elems = elems_string
+                    elif type(elems_string) == str:
+                        if elems_string == '':
+                            print 'Ending get_hists_from_queue'
+                            q.put('')
+                            print 'Put Empty'
+                            break
+                        try:
+                            elems = json.loads(elems_string)
+                        except:
+                            continue
+                    if len(elems) == 0:
+                        continue
+                    done = False
+                except Queue.Empty as e:
+                    if done == False:
+                        done = True
+                    continue
+            data = elems.pop()
+
+            loss_tuples, weight, cps, mu, nu, run_id, event_id = data # Unpack the data
+            loss_tuples = mlc.add_loss_sum(loss_tuples, mlc.get_valid_checkpoints(cps)) # Pre-calculate loss sums
+
+            # Make everything a tuple for memoization
+            loss_tuples = tuple([tuple(loss) for loss in loss_tuples])
+            cps = tuple([tuple(cp) for cp in cps])
+            mu = tuple(mu)
+            nu = tuple(nu)
+
+            # Add points to each histogram
+            for hist, func, bins in itertools.izip(hists, points_functions, binnings):
+                ret = func(hist, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id)
+                if ret:
+                    n_good += 1
+                else:
+                    n_bad += 1
+
+            # Clear the memoization dictionaries since we are done with the muon
+            mlc.get_loss_info.__self__.clear()
+            mlc.get_energy_.__self__.clear()
+    except Exception as e:
+        print 'Got exception in thread %d' % q_n
+        print e
+    print 'Good: %d' % n_good
+    print 'Bad: %d' % n_bad
+    return hists
+
+def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n = 1):
+    """
+    Process information from input files to create histograms
+    """
+    reader_hists = [hists] + [[copy.deepcopy(hist) for hist in hists] for i in xrange(n-1)]
+    # Loop over input files
+    for f in infiles:
+        m = multiprocessing.Manager()
+        q = m.Queue(maxsize=n)
+        reader_pool = multiprocessing.Pool(1)
+        reader_result = reader_pool.apply_async(mlc.file_reader, (f, q))
+        pool = multiprocessing.Pool(n)
+        #threads = [multiprocessing.Process(target=get_hists_from_reader, args=(r,binnings,points_functions,h)) for r,h in itertools.izip(readers, reader_hists)]
+        results = [pool.apply_async(get_hists_from_queue, (q,binnings,points_functions,h,i)) for i,h in enumerate(reader_hists)]
+        #reader_hists = [get_hists_from_queue(q, binnings, points_functions, h, i)]
+        #reader_result.get()
+        reader_hists = [res.get() for res in results]
+    for h in reader_hists[1:]:
+        for i in xrange(len(h)):
+            reader_hists[0][i].accumulate(h[i])
+
+    return reader_hists[0]
