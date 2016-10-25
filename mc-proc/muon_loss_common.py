@@ -782,7 +782,7 @@ def file_reader(file_name, q, max_scratch_size = 1024**3):
         tray.Finish()
         pool.close()
         pool.join()
-        q.put(Queue.Empty)
+        q.put('')
     else:
         stop = False
         elems = []
