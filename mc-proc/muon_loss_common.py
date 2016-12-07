@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import scipy.optimize
 
 from icecube import dataclasses
-import icetray
 from I3Tray import *
 from icecube import icetray, dataio
 from icecube import dataclasses
@@ -13,6 +12,7 @@ from icecube import tableio, hdfwriter
 from icecube import simclasses
 from icecube import NewNuFlux
 from icecube.icetray import I3Units
+import icecube.weighting.weighting as weighting
 from icecube.weighting.weighting import from_simprod
 
 import os
@@ -29,6 +29,9 @@ import shutil
 import Queue
 import multiprocessing
 import threaded
+import copy
+import traceback
+import sys
 
 # Define fucntion to get item from list or tuple
 _get0 = op.itemgetter(0)
@@ -615,52 +618,67 @@ def file_writer(file_name, q):
 
     while True:
         try:
-            elems = q.get(True, 0.1)                                                                                                                                             
-            if elems is Queue.Empty:
+            elems = q.get(True, 0.1)
+            if elems is Queue.Empty or elems is None or elems == '':
                 print 'Ending writer thread'
                 write_file.close()
                 if is_scratch:
                     print shutil.move(scratch_file_name, file_name)
                 return
-            elems.reverse()
             write(write_file, elems)
         except Queue.Empty as e:
-            print 'Empty'
+            #print 'Empty'
             pass
         except Exception as e:
             print 'Got other exception'
             print e
             raise
 
-def process_DAQ(frame, q, n, is_mono = False):
+p = dataclasses.I3Particle()
+loss_set = set([p.PairProd, p.DeltaE, p.Brems, p.NuclInt])
+nu_set = set([p.Nu, p.NuE, p.NuEBar, p.NuMu, p.NuMuBar, p.NuTau, p.NuTauBar])
+mu_set = set([p.MuPlus, p.MuMinus])
+
+def get_data_from_frame(frame, is_mono, n, flux_name, generator):
+    flux = NewNuFlux.makeFlux(flux_name).getFlux
     tree = frame['I3MCTree']
     tracks = frame['MMCTrackList']
     if not is_mono:
         weight_dict = frame['I3MCWeightDict']
-        header = frame['I3EventHeader']
+        try:
+            header = frame['I3EventHeader']
+        except:
+            header = None
         tree_parent = tree.parent
 
     primaries = tree.primaries
 
     tracks = [track for track in tracks if track.particle.type in mu_set] # Only tracks that are muons
+    #print 'Have %d muon tracks' % len(tracks)
     tracks = [track for track in tracks if tree.has(track.particle)] # Only tracks in MC tree
+    #print 'Have %d tracks from MC tree' % len(tracks)
 
     if is_mono:
         muon_track = max(tracks, key=lambda x: x.particle.energy)
     else:
         tracks = [track for track in tracks if tree_parent(track.particle).type in nu_set] # Only tracks that have nu parent
+        #print 'Have %d tracks with nu parent' % len(tracks)
         tracks = [track for track in tracks if tree_parent(track.particle) in primaries] # Only tracks that have primary parent
-        tracks = [track for track in tracks if track.particle.energy >= 5000] # Only muons that are at least 5TeV at creation
+        #print 'Have %d tracks with primary parent' % len(tracks)
+        tracks = [track for track in tracks if track.particle.energy >= 1000] # Only muons that are at least 1TeV at creation
+        #print 'Have %d tracks above 1TeV' % len(tracks)
 
         nu_primaries_of_tracks = np.unique([tree_parent(track.particle) for track in tracks])
         tracks_by_primary = [[track for track in tracks if tree_parent(track.particle) == p] for p in nu_primaries_of_tracks]
-        max_E_muons_by_primary = [max(tracks_for_primary, key=self.get_energy) for tracks_for_primary in tracks_by_primary]
+        max_E_muons_by_primary = [max(tracks_for_primary, key=lambda x: x.particle.energy) for tracks_for_primary in tracks_by_primary]
         n_muons = len(max_E_muons_by_primary)
         if(n_muons > 1):
             raise ValueError('There is more than one muon in the frame')
         if(n_muons < 1):
+            #print 'No muons'
             return
         nu = nu_primaries_of_tracks[0]
+        muon_track = max_E_muons_by_primary[0]
 
     muon_p = muon_track.particle
     #HighEMuonTracks.append(muon_track)
@@ -688,7 +706,7 @@ def process_DAQ(frame, q, n, is_mono = False):
         nu_weight = 1e-5
     else:
         nu_cos_zenith = np.cos(nu.dir.zenith)
-        nu_p_int = weight_dict['TotalInteractionProbabilityWeight']
+        nu_p_int = weight_dict['TotalWeight']
         nu_unit = I3Units.cm2/I3Units.m2
         nu_weight = nu_p_int*(flux(nu.type, nu.energy, nu_cos_zenith)/nu_unit)/generator(nu.energy, nu.type, nu_cos_zenith)
 
@@ -705,26 +723,118 @@ def process_DAQ(frame, q, n, is_mono = False):
         data.append(n)
     else:
         data.append((nu.energy, nu.pos.x, nu.pos.y, nu.pos.z, nu.dir.zenith, nu.dir.azimuth, nu.length))
-        data.append(header.run_id)
-        data.append(header.event_id)
+        if header is None:
+            data.append(0)
+            data.append(n)
+        else:
+            data.append(header.run_id)
+            data.append(header.event_id)
+    return data
 
-    q.put([data])
+def process_DAQ(frame, q, n, is_mono, flux_name, generator):
+    print 'process_DAQ'
+    try:
+        data = get_data_from_frame(frame, is_mono, n, flux_name, generator)
+        if data is None:
+            return
+        q.put([data])
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+        print 'Got exception in process_DAQ: ', e
+        raise
+
+def read_from_json_file(read_file_name, q):
+    print 'read_from_json_file'
+    stop = False
+    read_file = open(read_file_name, 'r')
+    while True:
+        try:
+            elems = read_file.readline()
+            if elems == '':
+                q.put('')
+                raise ValueError('Nothing left in file')
+            q.put(elems)
+            #print 'Put'
+        except Exception as e:
+            print 'Got exception: %s' % str(e)
+            print 'Issue reading more from file'
+            print 'Ending reader thread'
+            return
+
+def read_from_pkl_file(read_file_name, q):
+    print 'read_from_pkl_file'
+    stop = False
+    read_file = open(read_file_name, 'rb')
+    while True:
+        try:
+            elems = pickle.load(read_file)
+            if elems == None:
+                q.put('')
+                raise ValueError('Nothing left in file')
+            q.put(elems)
+            #print 'Put'
+        except Exception as e:
+            print 'Got exception: %s' % str(e)
+            print 'Issue reading more from file'
+            print 'Ending reader thread'
+            return
+
+#def read_from_i3_file(file_name, frame_q):
+def read_from_i3_file(file_name, frame_pool, is_mono, q, generator, flux_name = 'honda2006'):
+    print 'read_from_i3_file'
+    #flux = NewNuFlux.makeFlux(flux_name).getFlux
+    try:
+        class MCMuonInfoTray(icetray.I3ConditionalModule):
+            def __init__(self, context):
+                super(MCMuonInfoTray, self).__init__(context)
+                self.n = None
+            def Configure(self):
+                pass
+            def Physics(self, frame):
+                pass
+            def DAQ(self, frame):
+                if self.n == None:
+                    self.n = 0
+                else:
+                    self.n += 1
+                #print 'Putting'
+                #frame_q.put((self.n, frame))
+                #process_DAQ(frame, q, self.n, is_mono, flux, generator)
+                #frame_pool.apply(process_DAQ, (frame, q, self.n, is_mono, flux, generator))
+                res = frame_pool.apply_async(get_data_from_frame, (frame, is_mono, self.n, flux_name, generator))
+                data = res.get()
+                if data is not None:
+                    q.put([data])
+                
+                #print 'Put frame: %d' % self.n
+        tray = I3Tray()
+        tray.Add("I3Reader", "my_reader", FilenameList=[file_name])
+        tray.Add(lambda frame: frame.Has('I3MCTree'))
+        tray.Add(lambda frame: frame.Has('MMCTrackList'))
+        tray.Add(MCMuonInfoTray)
+        print 'Executing tray'
+        tray.Execute()
+        tray.Finish()
+        print 'Finished tray'
+        q.put('')
+        print 'Done with i3 file'
+    except Exception as e:
+        print e
 
 
-def file_reader(file_name, q, max_scratch_size = 1024**3):
+def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006', generator=None):
     """
     Make a file reader based on file extension and /scratch/$USER/ availability
     """
-    max_i3_processes
     is_i3 = False
 
-    #print 'In file reader thread'
+    print 'In file reader thread'
     if file_name.endswith('.pkl'):
         read = read_from_pkl_file
         print 'Got a pkl file!'
     elif file_name.endswith('.json'):
         #read = read_from_json_file
-        read = lambda f: f.readline()
+        read = read_from_json_file
         print 'Got a json file!'
     elif file_name.endswith('.i3.gz') or file_name.endswith('i3.bz2'):
         is_i3 = True
@@ -756,51 +866,41 @@ def file_reader(file_name, q, max_scratch_size = 1024**3):
         print file_name
         read_file_name = file_name
 
+    pools = []
+
     if is_i3:
+        print 'is an i3 file'
+        #reader_pool = multiprocessing.Pool(1, maxtasksperchild=1)
+        #pools.append(reader_pool) 
+        frame_pool = multiprocessing.Pool(2, maxtasksperchild=100)
+        pools.append(frame_pool)
+        #reader_pool.apply_async(read_from_i3_file, (file_name, frame_q))
+        #is_mono = 'mono' in file_name
+        #frame_pool.apply_async(frame_processor, (frame_q, q, is_mono, None, generator))
+        
+        reader_pool = multiprocessing.Pool(1, maxtasksperchild=1)
+        pools.append(reader_pool) 
+        #frame_pool = multiprocessing.Pool(8, maxtasksperchild=100)
+        #pools.append(frame_pool)
         is_mono = 'mono' in file_name
-        pool = multiprocessing.Pool(2, maxtasksperchild=100)
-        class MCMuonInfoTray(icetray.I3ConditionalModule):
-            def __init__(self, context):
-                super(MyModule, self).__init__(context)
-                self.n = None
-            def Configure(self):
-                pass
-            def Physics(self, frame):
-                pass
-            def DAQ(self, frame):
-                if self.n == None:
-                    self.n = 0
-                else:
-                    self.n += 1
-                result = pool.apply_async(process_DAQ, (frame, q, self.n, is_mono))
-        tray = I3Tray()
-        tray.Add("I3Reader", "my_reader", FilenameList=[read_file_name])
-        tray.Add(lambda frame: frame.Has('I3MCTree'))
-        tray.Add(lambda frame: frame.Has('MMCTrackList'))
-        tray.Add(MCMuonInfoTray)
-        tray.Execute()
-        tray.Finish()
-        pool.close()
-        pool.join()
-        q.put('')
+        #reader_pool.apply_async(read_from_i3_file, (read_file_name, is_mono, q, generator, flux_name))
+        read_from_i3_file(read_file_name, frame_pool, is_mono, q, generator, flux_name)
+        #frame_pool.apply_async(frame_processor, (frame_q, q, is_mono, None, generator))
     else:
-        stop = False
-        elems = []
-        while True:
-            try:
-                elems = read(read_file)
-                if elems == '':
-                    q.put(elems)
-                    raise ValueError('Nothing left in file')
-                q.put(elems)
-                print 'Put'
-            except Exception as e:
-                print 'Got exception: %s' % str(e)
-                print 'Issue reading more from file'
-                print 'Ending reader thread'
-                if is_scratch:
-                    os.remove(scratch_file_name)
-                return
+        print 'is not an i3 file'
+        reader_pool = multiprocessing.Pool(1, maxtasksperchild=100)
+        pools.append(reader_pool)
+        result = reader_pool.apply_async(read, (read_file_name, q))
+
+    if is_scratch:
+        try:
+            reader_pool.apply_async(os.remove, (scratch_file_name,))
+        except:
+            print 'Error deleting scratch file: %s' % scratch_file_name
+            pass
+
+    print "Exiting reader"
+    return pools
 
 def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
     print 'In thread!'
@@ -819,7 +919,7 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
                         if elems_string == '':
                             print 'Ending get_hists_from_queue'
                             q.put('')
-                            print 'Put Empty'
+                            #print 'Put Empty'
                             break
                         try:
                             elems = json.loads(elems_string)
@@ -835,7 +935,7 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
             data = elems.pop()
 
             loss_tuples, weight, cps, mu, nu, run_id, event_id = data # Unpack the data
-            loss_tuples = mlc.add_loss_sum(loss_tuples, mlc.get_valid_checkpoints(cps)) # Pre-calculate loss sums
+            loss_tuples = add_loss_sum(loss_tuples, get_valid_checkpoints(cps)) # Pre-calculate loss sums
 
             # Make everything a tuple for memoization
             loss_tuples = tuple([tuple(loss) for loss in loss_tuples])
@@ -852,16 +952,17 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
                     n_bad += 1
 
             # Clear the memoization dictionaries since we are done with the muon
-            mlc.get_loss_info.__self__.clear()
-            mlc.get_energy_.__self__.clear()
+            get_loss_info.__self__.clear()
+            get_energy_.__self__.clear()
     except Exception as e:
         print 'Got exception in thread %d' % q_n
+        traceback.print_exc(file=sys.stdout)
         print e
     print 'Good: %d' % n_good
     print 'Bad: %d' % n_bad
     return hists
 
-def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n = 1):
+def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n, flux_name, generator):
     """
     Process information from input files to create histograms
     """
@@ -870,11 +971,10 @@ def get_hists_from_files(infiles, binnings, points_functions, hists, file_range,
     for f in infiles:
         m = multiprocessing.Manager()
         q = m.Queue(maxsize=n)
-        reader_pool = multiprocessing.Pool(1)
-        reader_result = reader_pool.apply_async(mlc.file_reader, (f, q))
         pool = multiprocessing.Pool(n)
         #threads = [multiprocessing.Process(target=get_hists_from_reader, args=(r,binnings,points_functions,h)) for r,h in itertools.izip(readers, reader_hists)]
         results = [pool.apply_async(get_hists_from_queue, (q,binnings,points_functions,h,i)) for i,h in enumerate(reader_hists)]
+        pools = file_reader(f, q, 1024**3.0, flux_name, generator)
         #reader_hists = [get_hists_from_queue(q, binnings, points_functions, h, i)]
         #reader_result.get()
         reader_hists = [res.get() for res in results]
@@ -883,3 +983,20 @@ def get_hists_from_files(infiles, binnings, points_functions, hists, file_range,
             reader_hists[0][i].accumulate(h[i])
 
     return reader_hists[0]
+
+
+def i3_to_json(infiles, n, flux_name, generator):
+    """
+    Process information from input files to create histograms
+    """
+    # Loop over input files
+    for f in infiles:
+        m = multiprocessing.Manager()
+        q = m.Queue(maxsize=n)
+        pool = multiprocessing.Pool(n)
+        json_file_name = f+'.json'
+        result = pool.apply_async(file_writer, (json_file_name, q))
+        pools = file_reader(f, q, 1024**3.0, flux_name, generator)
+        result.get()
+    return
+

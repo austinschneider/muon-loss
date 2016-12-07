@@ -12,7 +12,8 @@ import multiprocessing
 import Queue
 
 import muon_loss_common as mlc
-
+from icecube import NewNuFlux
+import icecube.weighting.weighting as weighting
 import frac_loss
 import energy_distribution
 
@@ -48,6 +49,11 @@ else:
     file_range = [int(i) for i in range.split('-', 1)] # Split into 1 or 2 numbers
 ncores = args.ncores
 
+#Define the flux and the generator
+
+flux_name = 'honda2006'                                                                                                                     
+generator = weighting.NeutrinoGenerator(1000000, 1000, 1000000, -2, 'NuMu', InjectionMode='Surface')
+
 def plot(hists, binnings, plot_functions, plotdir):
     """
     Call plotting functions on all histograms
@@ -79,7 +85,7 @@ if plotdir != '' or outfile != '':
         if aggregate:
             hists, binnings = mlc.aggregate_info_from_files(infiles)
         else:
-            hists = mlc.get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n=ncores)
+            hists = mlc.get_hists_from_files(infiles, binnings, points_functions, hists, file_range, ncores, flux_name, generator)
         if outfile != '':
             mlc.save_info_to_file(outfile, hists, binnings)
     elif len(hist_file) > 0:

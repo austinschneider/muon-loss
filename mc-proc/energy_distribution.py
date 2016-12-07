@@ -47,6 +47,11 @@ def add_point(hb, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id):
     if max_range - min_range < max(bins):
         return False
 
+    if(starts_outside_simvol and track_cps[0][0] < 1000):
+    #    print 'Energy cut'
+        return False
+
+
     # Convert to tuple for memoization
     loss_tuples = tuple(loss_tuples)
 
@@ -54,7 +59,7 @@ def add_point(hb, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id):
         x = bins[i]
         x += min_range
         if(x > max_range):
-            continue
+            break
         else:
             # Total losses
             E_at_x = mlc.get_energy(x, new_cps, loss_tuples)
@@ -74,10 +79,11 @@ def plot(hb, bins, plotdir, split=False):
     fig, ax = plt.subplots(1)
     max_y = -np.inf
     min_y = np.inf
+    scale_factor = max([sum(hist.get_y()*hist.get_w()) for hist in hb.hists])
     for i,hist in enumerate(hb.hists):
         y = hist.get_y()
         w = hist.get_w()
-        y = y*w / sum(w)
+        y = y*w / scale_factor
         x = (hist.bins[:-1] + hist.bins[1:]) / 2.0
         data, edges, patches = plt.hist(x, bins=hist.bins, weights=y, label='Energy After %dm' % bins[i], color=cs((bins[i] - bins[0]) / bins[-1]), histtype='step')
         min_y = min(min_y, min(data[data > 0]))
@@ -86,13 +92,13 @@ def plot(hb, bins, plotdir, split=False):
     
     max_y = 10**np.ceil(np.log10(max_y))
     min_y = 10**np.floor(np.log10(min_y))
-    plt.legend(loc=2)
+    #plt.legend(loc=2)
     plt.xlabel('Muon Energy (GeV)')
     plt.ylabel('Number of Events')
     plt.ylim((min_y,max_y))
     plt.xscale('log')
     plt.yscale('log')
-    plt.savefig(plotdir + 'energy_distribution_' + ('%d_to_%d_%dbins' % (min(bins), max(bins), len(bins)-1)) + '.png')
+    plt.savefig(plotdir + 'energy_distribution_' + ('%d_to_%d_%dbins' % (min(bins), max(bins), len(bins)-1)) + '.eps', format='eps', dpi=1000)
     plt.clf()
     plt.close(fig)
 

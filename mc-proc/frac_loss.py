@@ -58,9 +58,9 @@ def add_point(hist, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id):
     hist, ratio_hist = hist.hists
 
     # Make some cuts
-    #if(mu[mlc.muon_p_energy] < 5000):
+    if(mu[mlc.muon_p_energy] < 1000):
     #    print 'Energy cut'
-    #    return False
+        return False
 
     # Values to accumulate
     point_x = []
@@ -80,9 +80,9 @@ def add_point(hist, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id):
     track_cps = cps[1:-1]
 
     starts_outside_simvol = track_cps[0][0] > 0
-    #if(starts_outside_simvol and track_cps[0][0] < 5000):
+    if(starts_outside_simvol and track_cps[0][0] < 1000):
     #    print 'Energy cut'
-    #    return False
+        return False
 
     # Sanity check on the segment of track we are considering
     if max_range - min_range > 10000:
@@ -209,7 +209,7 @@ def plot_frac_loss(hist, bins, plotdir, split=False):
     plt.xlabel('Track Distance (m)')
     plt.ylabel('Fractional Energy Loss')
     plt.title(label)
-    plt.savefig(plotdir + 'fractional_energy_loss_' + re.sub(' ', '_', label.translate(None, '\\/:!@#$%Z^&*()+=`;"\'?><,|{}')) + ('%d_to_%d_%dbins' % (min(bins), max(bins), len(bins)-1)) + '_split_' + str(split) + '.png')
+    plt.savefig(plotdir + 'fractional_energy_loss_' + re.sub(' ', '_', label.translate(None, '\\/:!@#$%Z^&*()+=`;"\'?><,|{}')) + ('%d_to_%d_%dbins' % (min(bins), max(bins), len(bins)-1)) + '_split_' + str(split) + '.eps', format='eps', dpi=1000)
     plt.clf()
     plt.close(fig)
 
@@ -241,7 +241,7 @@ def plot_ratio(hist, bins, plotdir):
     plt.yscale('log')
     plt.ylim((min_y, max_y))
     plt.legend(loc=3)
-    plt.savefig(plotdir + 'fractional_energy_loss_ratio_' + ('%d-%d_%d-%d' % (bins[0], bins[1], bins[-2], bins[-1])) + '.png')
+    plt.savefig(plotdir + 'fractional_energy_loss_ratio_' + ('%d-%d_%d-%d' % (bins[0], bins[1], bins[-2], bins[-1])) + '.eps', format='eps', dpi=1000)
     plt.clf()
     plt.close(fig)
 
