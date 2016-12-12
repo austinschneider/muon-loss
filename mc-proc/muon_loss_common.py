@@ -639,8 +639,8 @@ loss_set = set([p.PairProd, p.DeltaE, p.Brems, p.NuclInt])
 nu_set = set([p.Nu, p.NuE, p.NuEBar, p.NuMu, p.NuMuBar, p.NuTau, p.NuTauBar])
 mu_set = set([p.MuPlus, p.MuMinus])
 
-def get_data_from_frame(frame, is_mono, n, flux_name, generator):
-    flux = NewNuFlux.makeFlux(flux_name).getFlux
+def get_data_from_frame(frame, is_mono, n, flux, generator):
+    #flux = NewNuFlux.makeFlux(flux_name).getFlux
     tree = frame['I3MCTree']
     tracks = frame['MMCTrackList']
     if not is_mono:
@@ -731,10 +731,11 @@ def get_data_from_frame(frame, is_mono, n, flux_name, generator):
             data.append(header.event_id)
     return data
 
-def process_DAQ(frame, q, n, is_mono, flux_name, generator):
-    print 'process_DAQ'
+##def process_DAQ(frame, q, n, is_mono, flux_name, generator):
+def process_DAQ(frame, q, n, is_mono, flux, generator):
+    #print 'process_DAQ'
     try:
-        data = get_data_from_frame(frame, is_mono, n, flux_name, generator)
+        data = get_data_from_frame(frame, is_mono, n, flux, generator)
         if data is None:
             return
         q.put([data])
@@ -780,9 +781,10 @@ def read_from_pkl_file(read_file_name, q):
             return
 
 #def read_from_i3_file(file_name, frame_q):
-def read_from_i3_file(file_name, frame_pool, is_mono, q, generator, flux_name = 'honda2006'):
+def read_from_i3_file(file_name, is_mono, q, generator, flux_name='honda2006'):
+##def read_from_i3_file(file_name, frame_pool, is_mono, q, generator, flux_name = 'honda2006'):
     print 'read_from_i3_file'
-    #flux = NewNuFlux.makeFlux(flux_name).getFlux
+    flux = NewNuFlux.makeFlux(flux_name).getFlux
     try:
         class MCMuonInfoTray(icetray.I3ConditionalModule):
             def __init__(self, context):
@@ -799,12 +801,12 @@ def read_from_i3_file(file_name, frame_pool, is_mono, q, generator, flux_name = 
                     self.n += 1
                 #print 'Putting'
                 #frame_q.put((self.n, frame))
-                #process_DAQ(frame, q, self.n, is_mono, flux, generator)
+                process_DAQ(frame, q, self.n, is_mono, flux, generator)
                 #frame_pool.apply(process_DAQ, (frame, q, self.n, is_mono, flux, generator))
-                res = frame_pool.apply_async(get_data_from_frame, (frame, is_mono, self.n, flux_name, generator))
-                data = res.get()
-                if data is not None:
-                    q.put([data])
+                ##res = frame_pool.apply_async(get_data_from_frame, (frame, is_mono, self.n, flux_name, generator))
+                ##data = res.get()
+                ##if data is not None:
+                ##    q.put([data])
                 
                 #print 'Put frame: %d' % self.n
         tray = I3Tray()
@@ -872,23 +874,35 @@ def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006',
         print 'is an i3 file'
         #reader_pool = multiprocessing.Pool(1, maxtasksperchild=1)
         #pools.append(reader_pool) 
-        frame_pool = multiprocessing.Pool(2, maxtasksperchild=100)
-        pools.append(frame_pool)
+        ##frame_pool = multiprocessing.Pool(2, maxtasksperchild=100)
+        ##pools.append(frame_pool)
         #reader_pool.apply_async(read_from_i3_file, (file_name, frame_q))
         #is_mono = 'mono' in file_name
         #frame_pool.apply_async(frame_processor, (frame_q, q, is_mono, None, generator))
         
-        reader_pool = multiprocessing.Pool(1, maxtasksperchild=1)
+        while True:
+            try:
+                reader_pool = multiprocessing.Pool(1, maxtasksperchild=1)
+                break
+            except Exception as e:
+                print 'Could not create pool'
+                print e
         pools.append(reader_pool) 
         #frame_pool = multiprocessing.Pool(8, maxtasksperchild=100)
         #pools.append(frame_pool)
         is_mono = 'mono' in file_name
-        #reader_pool.apply_async(read_from_i3_file, (read_file_name, is_mono, q, generator, flux_name))
-        read_from_i3_file(read_file_name, frame_pool, is_mono, q, generator, flux_name)
+        reader_pool.apply_async(read_from_i3_file, (read_file_name, is_mono, q, generator, flux_name))
+        ##read_from_i3_file(read_file_name, frame_pool, is_mono, q, generator, flux_name)
         #frame_pool.apply_async(frame_processor, (frame_q, q, is_mono, None, generator))
     else:
         print 'is not an i3 file'
-        reader_pool = multiprocessing.Pool(1, maxtasksperchild=100)
+        while True:
+            try:
+                reader_pool = multiprocessing.Pool(1, maxtasksperchild=100)
+                break
+            except Exception as e:
+                print 'Could not create pool'
+                print e
         pools.append(reader_pool)
         result = reader_pool.apply_async(read, (read_file_name, q))
 
@@ -902,7 +916,7 @@ def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006',
     print "Exiting reader"
     return pools
 
-def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
+def get_hists_from_queue(q, binnings, points_functions, hists, q_n, N):
     print 'In thread!'
     elems = []
     done = False
@@ -943,8 +957,19 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
             mu = tuple(mu)
             nu = tuple(nu)
 
+            effective_number = 0
+
             # Add points to each histogram
             for hist, func, bins in itertools.izip(hists, points_functions, binnings):
+                if type(hist) is histogram_bundle:
+                    for h in hist.hists:
+                        w = h.weights
+                        w2 = h.get_w2()
+                        effective_number = max(max(w**2/w2), effective_number)
+                else:
+                    w = hist.weights
+                    w2 = hist.get_w2()
+                    effective_number = max(max(w**2/w2), effective_number)
                 ret = func(hist, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id)
                 if ret:
                     n_good += 1
@@ -954,6 +979,9 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
             # Clear the memoization dictionaries since we are done with the muon
             get_loss_info.__self__.clear()
             get_energy_.__self__.clear()
+            if effective_number >= N:
+                print 'Ending get_hists_from_queue'
+                break
     except Exception as e:
         print 'Got exception in thread %d' % q_n
         traceback.print_exc(file=sys.stdout)
@@ -962,7 +990,7 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
     print 'Bad: %d' % n_bad
     return hists
 
-def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n, flux_name, generator):
+def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n, flux_name, generator, N=np.inf):
     """
     Process information from input files to create histograms
     """
@@ -971,13 +999,24 @@ def get_hists_from_files(infiles, binnings, points_functions, hists, file_range,
     for f in infiles:
         m = multiprocessing.Manager()
         q = m.Queue(maxsize=n)
-        pool = multiprocessing.Pool(n)
+        while True:
+            try:
+                pool = multiprocessing.Pool(n)
+                break
+            except Exception as e:
+                print  'Could not create pool'
+                print e
         #threads = [multiprocessing.Process(target=get_hists_from_reader, args=(r,binnings,points_functions,h)) for r,h in itertools.izip(readers, reader_hists)]
-        results = [pool.apply_async(get_hists_from_queue, (q,binnings,points_functions,h,i)) for i,h in enumerate(reader_hists)]
+        results = [pool.apply_async(get_hists_from_queue, (q,binnings,points_functions,h,i,N/n)) for i,h in enumerate(reader_hists)]
         pools = file_reader(f, q, 1024**3.0, flux_name, generator)
         #reader_hists = [get_hists_from_queue(q, binnings, points_functions, h, i)]
         #reader_result.get()
+        for p in pools:
+            p.close()
+            p.join()
         reader_hists = [res.get() for res in results]
+        pool.close()
+        pool.join()
     for h in reader_hists[1:]:
         for i in xrange(len(h)):
             reader_hists[0][i].accumulate(h[i])
@@ -992,11 +1031,22 @@ def i3_to_json(infiles, n, flux_name, generator):
     # Loop over input files
     for f in infiles:
         m = multiprocessing.Manager()
-        q = m.Queue(maxsize=n)
-        pool = multiprocessing.Pool(n)
+        q = m.Queue(maxsize=100)
+        while True:
+            try:
+                pool = multiprocessing.Pool(n)
+                break
+            except Exception as e:
+                print 'Could not create pool'
+                print e
         json_file_name = f+'.json'
         result = pool.apply_async(file_writer, (json_file_name, q))
         pools = file_reader(f, q, 1024**3.0, flux_name, generator)
+        for p in pools:
+            p.close()
+            p.join()
         result.get()
+        pool.close()
+        pool.join()
     return
 

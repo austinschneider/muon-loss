@@ -33,6 +33,7 @@ parser.set_defaults(aggregate=False)
 
 parser.add_argument('-r', '--range', default='')
 parser.add_argument('-n', '--ncores', type=int, default=1)
+parser.add_argument('-l', '--limit', type=float, default=np.inf)
 
 args = parser.parse_args()
 infile_string = args.infiles.strip('"\'')
@@ -48,6 +49,7 @@ if file_range == '':
 else:
     file_range = [int(i) for i in range.split('-', 1)] # Split into 1 or 2 numbers
 ncores = args.ncores
+N = args.limit
 
 #Define the flux and the generator
 
@@ -85,7 +87,7 @@ if plotdir != '' or outfile != '':
         if aggregate:
             hists, binnings = mlc.aggregate_info_from_files(infiles)
         else:
-            hists = mlc.get_hists_from_files(infiles, binnings, points_functions, hists, file_range, ncores, flux_name, generator)
+            hists = mlc.get_hists_from_files(infiles, binnings, points_functions, hists, file_range, ncores, flux_name, generator, N)
         if outfile != '':
             mlc.save_info_to_file(outfile, hists, binnings)
     elif len(hist_file) > 0:
