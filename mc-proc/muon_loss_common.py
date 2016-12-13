@@ -916,7 +916,7 @@ def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006',
     print "Exiting reader"
     return pools
 
-def get_hists_from_queue(q, binnings, points_functions, hists, q_n, N):
+def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
     print 'In thread!'
     elems = []
     done = False
@@ -957,19 +957,8 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n, N):
             mu = tuple(mu)
             nu = tuple(nu)
 
-            effective_number = 0
-
             # Add points to each histogram
             for hist, func, bins in itertools.izip(hists, points_functions, binnings):
-                if type(hist) is histogram_bundle:
-                    for h in hist.hists:
-                        w = h.weights
-                        w2 = h.get_w2()
-                        effective_number = max(max(w**2/w2), effective_number)
-                else:
-                    w = hist.weights
-                    w2 = hist.get_w2()
-                    effective_number = max(max(w**2/w2), effective_number)
                 ret = func(hist, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id)
                 if ret:
                     n_good += 1
@@ -979,9 +968,6 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n, N):
             # Clear the memoization dictionaries since we are done with the muon
             get_loss_info.__self__.clear()
             get_energy_.__self__.clear()
-            if effective_number >= N:
-                print 'Ending get_hists_from_queue'
-                break
     except Exception as e:
         print 'Got exception in thread %d' % q_n
         traceback.print_exc(file=sys.stdout)
@@ -990,33 +976,34 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n, N):
     print 'Bad: %d' % n_bad
     return hists
 
-def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n, flux_name, generator, N=np.inf):
+def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n, flux_name, generator):
     """
     Process information from input files to create histograms
     """
     reader_hists = [hists] + [[copy.deepcopy(hist) for hist in hists] for i in xrange(n-1)]
+    m = multiprocessing.Manager()
+    q = m.Queue(maxsize=n)
+    while True:
+        try:
+            pool = multiprocessing.Pool(n)
+            break
+        except Exception as e:
+            print  'Could not create pool'
+            print e
+    results = [pool.apply_async(get_hists_from_queue, (q,binnings,points_functions,h,i)) for i,h in enumerate(reader_hists)]
+        
     # Loop over input files
     for f in infiles:
-        m = multiprocessing.Manager()
-        q = m.Queue(maxsize=n)
-        while True:
-            try:
-                pool = multiprocessing.Pool(n)
-                break
-            except Exception as e:
-                print  'Could not create pool'
-                print e
         #threads = [multiprocessing.Process(target=get_hists_from_reader, args=(r,binnings,points_functions,h)) for r,h in itertools.izip(readers, reader_hists)]
-        results = [pool.apply_async(get_hists_from_queue, (q,binnings,points_functions,h,i,N/n)) for i,h in enumerate(reader_hists)]
         pools = file_reader(f, q, 1024**3.0, flux_name, generator)
         #reader_hists = [get_hists_from_queue(q, binnings, points_functions, h, i)]
         #reader_result.get()
         for p in pools:
             p.close()
             p.join()
-        reader_hists = [res.get() for res in results]
-        pool.close()
-        pool.join()
+    reader_hists = [res.get() for res in results]
+    pool.close()
+    pool.join()
     for h in reader_hists[1:]:
         for i in xrange(len(h)):
             reader_hists[0][i].accumulate(h[i])
