@@ -47,9 +47,9 @@ def add_point(hb, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id):
     if max_range - min_range < max(bins):
         return False
 
-    if(starts_outside_simvol and track_cps[0][0] < 1000):
+    #if(starts_outside_simvol and track_cps[0][0] < 1000):
     #    print 'Energy cut'
-        return False
+    #    return False
 
 
     # Convert to tuple for memoization
