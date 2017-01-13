@@ -32,6 +32,7 @@ import threaded
 import copy
 import traceback
 import sys
+import random
 
 # Define fucntion to get item from list or tuple
 _get0 = op.itemgetter(0)
@@ -665,7 +666,7 @@ def get_data_from_frame(frame, is_mono, n, flux, generator):
         #print 'Have %d tracks with nu parent' % len(tracks)
         tracks = [track for track in tracks if tree_parent(track.particle) in primaries] # Only tracks that have primary parent
         #print 'Have %d tracks with primary parent' % len(tracks)
-        tracks = [track for track in tracks if track.particle.energy >= 1000] # Only muons that are at least 1TeV at creation
+        #tracks = [track for track in tracks if track.particle.energy >= 1000] # Only muons that are at least 1TeV at creation
         #print 'Have %d tracks above 1TeV' % len(tracks)
 
         nu_primaries_of_tracks = np.unique([tree_parent(track.particle) for track in tracks])
@@ -700,6 +701,15 @@ def get_data_from_frame(frame, is_mono, n, flux, generator):
     checkpoints.append((muon_track.Ef, abs(muon_pos_f - muon_p.pos)))
 
     checkpoints.append((0, muon_p.length))
+
+    new_cps = mlc.get_valid_checkpoints(checkpoints)
+    loss_tuples_ = tuple(loss_tuples)
+    min_range, max_range = mlc.get_track_range(checkpoints)
+    if max_range - min_range < 600:
+        return
+    deltaE = mlc.get_energy(min_range, new_cps, loss_tuples_) - mlc.get_energy(min_range+600, new_cps, loss_tuples_)
+    #if deltaE < 300:
+    #    return
 
     # Calculate weights
     if is_mono:
@@ -744,25 +754,31 @@ def process_DAQ(frame, q, n, is_mono, flux, generator):
         print 'Got exception in process_DAQ: ', e
         raise
 
-def read_from_json_file(read_file_name, q):
+def read_from_json_file(read_file_name, q, sampling_factor=1.0):
     print 'read_from_json_file'
-    stop = False
-    read_file = open(read_file_name, 'r')
-    while True:
-        try:
-            elems = read_file.readline()
-            if elems == '':
-                q.put('')
-                raise ValueError('Nothing left in file')
-            q.put(elems)
-            #print 'Put'
-        except Exception as e:
-            print 'Got exception: %s' % str(e)
-            print 'Issue reading more from file'
-            print 'Ending reader thread'
-            return
+    try:
+        stop = False
+        read_file = open(read_file_name, 'r')
+        while True:
+            try:
+                elems = read_file.readline()
+                if elems == '':
+                    raise ValueError('Nothing left in file')
+                r = random.random()
+                if r <= sampling_factor:
+                    q.put(elems)
+                #print 'Put'
+            except Exception as e:
+                print 'Got exception: %s' % str(e)
+                print 'Issue reading more from file'
+                print 'Ending reader thread'
+                return
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+        print 'Got exception in read_from_json_file: ', e
+        raise
 
-def read_from_pkl_file(read_file_name, q):
+def read_from_pkl_file(read_file_name, q, sampling_factor=1.0):
     print 'read_from_pkl_file'
     stop = False
     read_file = open(read_file_name, 'rb')
@@ -770,9 +786,10 @@ def read_from_pkl_file(read_file_name, q):
         try:
             elems = pickle.load(read_file)
             if elems == None:
-                q.put('')
                 raise ValueError('Nothing left in file')
-            q.put(elems)
+            r = random.random()
+            if r <= sampling_factor:
+                q.put(elems)
             #print 'Put'
         except Exception as e:
             print 'Got exception: %s' % str(e)
@@ -781,7 +798,7 @@ def read_from_pkl_file(read_file_name, q):
             return
 
 #def read_from_i3_file(file_name, frame_q):
-def read_from_i3_file(file_name, is_mono, q, generator, flux_name='honda2006'):
+def read_from_i3_file(file_name, is_mono, q, generator, flux_name='honda2006', sampling_factor=1.0):
 ##def read_from_i3_file(file_name, frame_pool, is_mono, q, generator, flux_name = 'honda2006'):
     print 'read_from_i3_file'
     flux = NewNuFlux.makeFlux(flux_name).getFlux
@@ -801,7 +818,9 @@ def read_from_i3_file(file_name, is_mono, q, generator, flux_name='honda2006'):
                     self.n += 1
                 #print 'Putting'
                 #frame_q.put((self.n, frame))
-                process_DAQ(frame, q, self.n, is_mono, flux, generator)
+                r = random.random()
+                if r <= sampling_factor:
+                    process_DAQ(frame, q, self.n, is_mono, flux, generator)
                 #frame_pool.apply(process_DAQ, (frame, q, self.n, is_mono, flux, generator))
                 ##res = frame_pool.apply_async(get_data_from_frame, (frame, is_mono, self.n, flux_name, generator))
                 ##data = res.get()
@@ -818,13 +837,12 @@ def read_from_i3_file(file_name, is_mono, q, generator, flux_name='honda2006'):
         tray.Execute()
         tray.Finish()
         print 'Finished tray'
-        q.put('')
         print 'Done with i3 file'
     except Exception as e:
         print e
 
 
-def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006', generator=None):
+def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006', generator=None, sampling_factor=1.0):
     """
     Make a file reader based on file extension and /scratch/$USER/ availability
     """
@@ -891,7 +909,7 @@ def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006',
         #frame_pool = multiprocessing.Pool(8, maxtasksperchild=100)
         #pools.append(frame_pool)
         is_mono = 'mono' in file_name
-        reader_pool.apply_async(read_from_i3_file, (read_file_name, is_mono, q, generator, flux_name))
+        reader_pool.apply_async(read_from_i3_file, (read_file_name, is_mono, q, generator, flux_name, sampling_factor))
         ##read_from_i3_file(read_file_name, frame_pool, is_mono, q, generator, flux_name)
         #frame_pool.apply_async(frame_processor, (frame_q, q, is_mono, None, generator))
     else:
@@ -904,7 +922,7 @@ def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006',
                 print 'Could not create pool'
                 print e
         pools.append(reader_pool)
-        result = reader_pool.apply_async(read, (read_file_name, q))
+        result = reader_pool.apply_async(read, (read_file_name, q, sampling_factor))
 
     if is_scratch:
         try:
@@ -976,7 +994,7 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
     print 'Bad: %d' % n_bad
     return hists
 
-def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n, flux_name, generator):
+def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n, flux_name, generator, sampling_factor=1.0):
     """
     Process information from input files to create histograms
     """
@@ -994,16 +1012,27 @@ def get_hists_from_files(infiles, binnings, points_functions, hists, file_range,
         
     # Loop over input files
     for f in infiles:
+        print 'Looking at new file'
         #threads = [multiprocessing.Process(target=get_hists_from_reader, args=(r,binnings,points_functions,h)) for r,h in itertools.izip(readers, reader_hists)]
-        pools = file_reader(f, q, 1024**3.0, flux_name, generator)
+        pools = file_reader(f, q, 1024**3.0, flux_name, generator, sampling_factor)
         #reader_hists = [get_hists_from_queue(q, binnings, points_functions, h, i)]
         #reader_result.get()
+        print 'Waiting on file reader'
         for p in pools:
+            print 'Waiting on pool'
             p.close()
             p.join()
+            print 'Done waiting on pool'
+        print 'Done with file'
+    q.put('')
+    print 'Done with files'
+    print 'Waiting on results'
     reader_hists = [res.get() for res in results]
+    print 'Got results'
+    print 'Joining pool'
     pool.close()
     pool.join()
+    print 'Pool joined'
     for h in reader_hists[1:]:
         for i in xrange(len(h)):
             reader_hists[0][i].accumulate(h[i])
