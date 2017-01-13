@@ -58,9 +58,9 @@ def add_point(hist, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id):
     hist, ratio_hist = hist.hists
 
     # Make some cuts
-    if(mu[mlc.muon_p_energy] < 1000):
+    #if(mu[mlc.muon_p_energy] < 1000):
     #    print 'Energy cut'
-        return False
+    #    return False
 
     # Values to accumulate
     point_x = []
@@ -80,9 +80,9 @@ def add_point(hist, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id):
     track_cps = cps[1:-1]
 
     starts_outside_simvol = track_cps[0][0] > 0
-    if(starts_outside_simvol and track_cps[0][0] < 1000):
+    #if(starts_outside_simvol and track_cps[0][0] < 1000):
     #    print 'Energy cut'
-        return False
+    #    return False
 
     # Sanity check on the segment of track we are considering
     if max_range - min_range > 10000:
