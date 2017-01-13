@@ -16,6 +16,7 @@ from icecube import NewNuFlux
 import icecube.weighting.weighting as weighting
 import frac_loss
 import energy_distribution
+import cut_distribution
 
 import json
 
@@ -33,6 +34,7 @@ parser.set_defaults(aggregate=False)
 
 parser.add_argument('-r', '--range', default='')
 parser.add_argument('-n', '--ncores', type=int, default=1)
+parser.add_argument('-s', '--sample', type=float, default=1.0)
 
 args = parser.parse_args()
 infile_string = args.infiles.strip('"\'')
@@ -48,6 +50,7 @@ if file_range == '':
 else:
     file_range = [int(i) for i in range.split('-', 1)] # Split into 1 or 2 numbers
 ncores = args.ncores
+sampling_factor = (lambda x: min(x, 1.0/x))(args.sample)
 
 #Define the flux and the generator
 
@@ -68,16 +71,16 @@ half_bins_600 = np.linspace(0, 600, 2+1)
 half_bins_1560 = np.linspace(0, 1560, 2+1)
 
 # Specify the functions we will use to add points to histograms
-points_functions = [frac_loss.add_point, frac_loss.add_point, frac_loss.add_point, frac_loss.add_point] + [energy_distribution.add_point, energy_distribution.add_point]
+points_functions = [frac_loss.add_point, frac_loss.add_point, frac_loss.add_point, frac_loss.add_point] + [energy_distribution.add_point, energy_distribution.add_point] + [cut_distribution.add_point, cut_distribution.add_point]
 
 # Specify the binnings
-binnings = [bins_600, bins_1560, half_bins_600, half_bins_1560] + [bins_600, bins_1560]
+binnings = [bins_600, bins_1560, half_bins_600, half_bins_1560] + [bins_600, bins_1560] + [bins_600, bins_1560]
 
 # Create the histogram objects to store information
-hists = [frac_loss.make_hist(bins) for bins in binnings[:-2]] + [energy_distribution.make_hist(bins) for bins in binnings[-2:]]
+hists = [frac_loss.make_hist(bins) for bins in binnings[:-4]] + [energy_distribution.make_hist(bins) for bins in binnings[-4:-2]] + [cut_distribution.make_hist(bins) for bins in binnings[-2:]]
 
 # Specify the plotting functions
-plot_functions = [frac_loss.plot]*4 + [energy_distribution.plot]*2
+plot_functions = [frac_loss.plot]*4 + [energy_distribution.plot]*2 + [cut_distribution.plot]*2
 
 # Do different things depending on the arguments
 if plotdir != '' or outfile != '':
@@ -85,7 +88,7 @@ if plotdir != '' or outfile != '':
         if aggregate:
             hists, binnings = mlc.aggregate_info_from_files(infiles)
         else:
-            hists = mlc.get_hists_from_files(infiles, binnings, points_functions, hists, file_range, ncores, flux_name, generator)
+            hists = mlc.get_hists_from_files(infiles, binnings, points_functions, hists, file_range, ncores, flux_name, generator, sampling_factor)
         if outfile != '':
             mlc.save_info_to_file(outfile, hists, binnings)
     elif len(hist_file) > 0:
