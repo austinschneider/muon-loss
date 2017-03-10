@@ -11,6 +11,8 @@ from icecube import dataclasses
 from icecube import tableio, hdfwriter
 from icecube import simclasses
 from icecube import NewNuFlux
+from icecube import photonics_service
+from icecube import VHESelfVeto
 from icecube.icetray import I3Units
 import icecube.weighting.weighting as weighting
 from icecube.weighting.weighting import from_simprod
@@ -33,6 +35,7 @@ import copy
 import traceback
 import sys
 import random
+import ntpath
 
 # Define fucntion to get item from list or tuple
 _get0 = op.itemgetter(0)
@@ -249,11 +252,11 @@ class histogram_nd(object):
         self.y2_weighted += hist.y2_weighted
 
     def get_w(self):
-        w = self.weights[:]
+        w = np.copy(self.weights)
         w[w == 0] = 1
         return w
     def get_w2(self):
-        w2 = self.weights2[:]
+        w2 = np.copy(self.weights2)
         w2[w2 == 0] = 1
         return w2
     def get_x(self):
@@ -640,7 +643,9 @@ loss_set = set([p.PairProd, p.DeltaE, p.Brems, p.NuclInt])
 nu_set = set([p.Nu, p.NuE, p.NuEBar, p.NuMu, p.NuMuBar, p.NuTau, p.NuTauBar])
 mu_set = set([p.MuPlus, p.MuMinus])
 
-def get_data_from_frame(frame, is_mono, n, flux, generator):
+def get_data_from_frame(frame, type_flags, n, flux, generator):
+    is_data = type_flags & 0x1
+    is_mono = (type_flags >> 1) & 0x1
     #flux = NewNuFlux.makeFlux(flux_name).getFlux
     tree = frame['I3MCTree']
     tracks = frame['MMCTrackList']
@@ -650,7 +655,13 @@ def get_data_from_frame(frame, is_mono, n, flux, generator):
             header = frame['I3EventHeader']
         except:
             header = None
+        #is_data = np.any(['Pulses' in k for k in frame.keys()]) or frame.has_key('InIceRawData')
         tree_parent = tree.parent
+    
+    if is_data:
+        points = VHESelfVeto.IntersectionsWithInstrumentedVolume(frame['I3Geometry'], frame['MPEFit_TT'])
+        if len(points) < 2 or not abs(points[0] - points[1]) >= 600:
+            return False
 
     primaries = tree.primaries
 
@@ -702,21 +713,15 @@ def get_data_from_frame(frame, is_mono, n, flux, generator):
 
     checkpoints.append((0, muon_p.length))
 
-    new_cps = mlc.get_valid_checkpoints(checkpoints)
-    loss_tuples_ = tuple(loss_tuples)
-    min_range, max_range = mlc.get_track_range(checkpoints)
-    if max_range - min_range < 600:
-        return
-    deltaE = mlc.get_energy(min_range, new_cps, loss_tuples_) - mlc.get_energy(min_range+600, new_cps, loss_tuples_)
-    #if deltaE < 300:
-    #    return
-
     # Calculate weights
     if is_mono:
         nu_weight = 1e-5
     else:
         nu_cos_zenith = np.cos(nu.dir.zenith)
-        nu_p_int = weight_dict['TotalWeight']
+        if is_data:
+            nu_p_int = weight_dict['TotalInteractionProbabilityWeight']
+        else:
+            nu_p_int = weight_dict['TotalWeight']
         nu_unit = I3Units.cm2/I3Units.m2
         nu_weight = nu_p_int*(flux(nu.type, nu.energy, nu_cos_zenith)/nu_unit)/generator(nu.energy, nu.type, nu_cos_zenith)
 
@@ -739,13 +744,20 @@ def get_data_from_frame(frame, is_mono, n, flux, generator):
         else:
             data.append(header.run_id)
             data.append(header.event_id)
+    if is_data:
+        mpe_fit = frame['MPEFit_TT']
+        data.append([(loss.energy, (loss.pos - mpe_fit.pos)*mpe_fit.dir, int(loss.type)) for loss in frame['MillipedeHighEnergy'] if loss.energy > 0])
+        data.append([(lambda x: (x.x, x.y, x.z))(p) for p in points])
+        data.append((mpe_fit.energy, mpe_fit.pos.x, mpe_fit.pos.y, mpe_fit.pos.z, mpe_fit.dir.zenith, mpe_fit.dir.azimuth, mpe_fit.length))
     return data
 
 ##def process_DAQ(frame, q, n, is_mono, flux_name, generator):
-def process_DAQ(frame, q, n, is_mono, flux, generator):
+def process_DAQ(frame, q, n, type_flags, flux, generator):
+    is_data = type_flags & 0x1
+    is_mono = (type_flags >> 1) & 0x1
     #print 'process_DAQ'
     try:
-        data = get_data_from_frame(frame, is_mono, n, flux, generator)
+        data = get_data_from_frame(frame, type_flags, n, flux, generator)
         if data is None:
             return
         q.put([data])
@@ -767,7 +779,6 @@ def read_from_json_file(read_file_name, q, sampling_factor=1.0):
                 r = random.random()
                 if r <= sampling_factor:
                     q.put(elems)
-                #print 'Put'
             except Exception as e:
                 print 'Got exception: %s' % str(e)
                 print 'Issue reading more from file'
@@ -790,49 +801,76 @@ def read_from_pkl_file(read_file_name, q, sampling_factor=1.0):
             r = random.random()
             if r <= sampling_factor:
                 q.put(elems)
-            #print 'Put'
         except Exception as e:
             print 'Got exception: %s' % str(e)
             print 'Issue reading more from file'
             print 'Ending reader thread'
             return
 
-#def read_from_i3_file(file_name, frame_q):
-def read_from_i3_file(file_name, is_mono, q, generator, flux_name='honda2006', sampling_factor=1.0):
-##def read_from_i3_file(file_name, frame_pool, is_mono, q, generator, flux_name = 'honda2006'):
-    print 'read_from_i3_file'
+def read_from_i3_file(file_name, type_flags, q, generator, flux_name='honda2006', sampling_factor=1.0, geo=None):
+    is_data = bool(type_flags & 0x1)
+    is_mono = bool((type_flags >> 1) & 0x1)
     flux = NewNuFlux.makeFlux(flux_name).getFlux
+    load('millipede')
     try:
-        class MCMuonInfoTray(icetray.I3ConditionalModule):
+        class MCMuonInfoModule(icetray.I3ConditionalModule):
             def __init__(self, context):
-                super(MCMuonInfoTray, self).__init__(context)
+                super(MCMuonInfoModule, self).__init__(context)
                 self.n = None
             def Configure(self):
                 pass
+            def DAQ(self, frame):
+                pass
             def Physics(self, frame):
                 pass
-            def DAQ(self, frame):
-                if self.n == None:
-                    self.n = 0
-                else:
-                    self.n += 1
-                #print 'Putting'
-                #frame_q.put((self.n, frame))
-                r = random.random()
-                if r <= sampling_factor:
-                    process_DAQ(frame, q, self.n, is_mono, flux, generator)
-                #frame_pool.apply(process_DAQ, (frame, q, self.n, is_mono, flux, generator))
-                ##res = frame_pool.apply_async(get_data_from_frame, (frame, is_mono, self.n, flux_name, generator))
-                ##data = res.get()
-                ##if data is not None:
-                ##    q.put([data])
-                
-                #print 'Put frame: %d' % self.n
+        def process_frame(self, frame):
+            if self.n == None:
+                self.n = 0
+            else:
+                self.n += 1
+            process_DAQ(frame, q, self.n, type_flags, flux, generator)
+        if is_data:
+            MCMuonInfoModule.Physics = process_frame
+        else:
+            MCMuonInfoModule.DAQ = process_frame
+        def cut_on_length(frame):
+            global passed_length_cut
+            points = VHESelfVeto.IntersectionsWithInstrumentedVolume(frame['I3Geometry'], frame['MPEFit_TT'])
+            if len(points) < 2:
+                return False
+            return abs(points[0] - points[1]) >= 600
+        def add_time_window(frame):
+            window = dataclasses.I3TimeWindow(*(lambda x: (min(x)-1000, max(x)+1000))([p.time for l in frame[pulse_series].apply(frame).values() for p in l]))
+            frame[pulse_series + 'TimeRange'] = window
+            return True
+        pulse_series = 'TTPulses'
         tray = I3Tray()
-        tray.Add("I3Reader", "my_reader", FilenameList=[file_name])
+        if geo is not None:
+            FilenameList = [geo]
+        else:
+            FilenameList = []
+        FilenameList.append(file_name)
+        tray.Add("I3Reader", "my_reader", FilenameList=FilenameList)
         tray.Add(lambda frame: frame.Has('I3MCTree'))
         tray.Add(lambda frame: frame.Has('MMCTrackList'))
-        tray.Add(MCMuonInfoTray)
+        if is_data:
+            tray.Add(lambda frame: frame.Has('MPEFit_TT'))
+            tray.Add(lambda frame: frame.Has(pulse_series))
+        tray.Add(lambda frame: (frame.Stop != icetray.I3Frame.Physics) or (random.random() <= sampling_factor))
+        if is_data:
+            tray.Add(cut_on_length)
+            tray.Add(add_time_window)
+            table_base = os.path.expandvars('$I3_DATA/photon-tables/splines/emu_%s.fits')
+            muon_service = photonics_service.I3PhotoSplineService(table_base % 'abs', table_base % 'prob', 0)
+            table_base = os.path.expandvars('$I3_DATA/photon-tables/splines/ems_spice1_z20_a10.%s.fits')
+            cascade_service = photonics_service.I3PhotoSplineService(table_base % 'abs', table_base % 'prob', 0)                                                                                                        
+            tray.Add('MuMillipede', 'millipede_highenergy',
+                    MuonPhotonicsService=muon_service, CascadePhotonicsService=cascade_service,
+                    PhotonsPerBin=15, MuonRegularization=0, ShowerRegularization=0,
+                    MuonSpacing=0, ShowerSpacing=10, SeedTrack='MPEFit_TT',
+                    Output='MillipedeHighEnergy', Pulses=pulse_series)
+
+        tray.Add(MCMuonInfoModule)
         print 'Executing tray'
         tray.Execute()
         tray.Finish()
@@ -842,7 +880,7 @@ def read_from_i3_file(file_name, is_mono, q, generator, flux_name='honda2006', s
         print e
 
 
-def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006', generator=None, sampling_factor=1.0):
+def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006', generator=None, sampling_factor=1.0, is_data=False, geo=None):
     """
     Make a file reader based on file extension and /scratch/$USER/ availability
     """
@@ -890,14 +928,6 @@ def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006',
 
     if is_i3:
         print 'is an i3 file'
-        #reader_pool = multiprocessing.Pool(1, maxtasksperchild=1)
-        #pools.append(reader_pool) 
-        ##frame_pool = multiprocessing.Pool(2, maxtasksperchild=100)
-        ##pools.append(frame_pool)
-        #reader_pool.apply_async(read_from_i3_file, (file_name, frame_q))
-        #is_mono = 'mono' in file_name
-        #frame_pool.apply_async(frame_processor, (frame_q, q, is_mono, None, generator))
-        
         while True:
             try:
                 reader_pool = multiprocessing.Pool(1, maxtasksperchild=1)
@@ -906,12 +936,9 @@ def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006',
                 print 'Could not create pool'
                 print e
         pools.append(reader_pool) 
-        #frame_pool = multiprocessing.Pool(8, maxtasksperchild=100)
-        #pools.append(frame_pool)
         is_mono = 'mono' in file_name
-        reader_pool.apply_async(read_from_i3_file, (read_file_name, is_mono, q, generator, flux_name, sampling_factor))
-        ##read_from_i3_file(read_file_name, frame_pool, is_mono, q, generator, flux_name)
-        #frame_pool.apply_async(frame_processor, (frame_q, q, is_mono, None, generator))
+        type_flags = int(is_data) | (int(is_mono) << 0x1)
+        reader_pool.apply_async(read_from_i3_file, (read_file_name, type_flags, q, generator, flux_name, sampling_factor, geo))
     else:
         print 'is not an i3 file'
         while True:
@@ -934,7 +961,7 @@ def file_reader(file_name, q, max_scratch_size = 1024**3, flux_name='honda2006',
     print "Exiting reader"
     return pools
 
-def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
+def get_hists_from_queue(q, binnings, points_functions, hists, q_n, is_data, kwargs={}):
     print 'In thread!'
     elems = []
     done = False
@@ -951,7 +978,6 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
                         if elems_string == '':
                             print 'Ending get_hists_from_queue'
                             q.put('')
-                            #print 'Put Empty'
                             break
                         try:
                             elems = json.loads(elems_string)
@@ -965,8 +991,11 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
                         done = True
                     continue
             data = elems.pop()
-
-            loss_tuples, weight, cps, mu, nu, run_id, event_id = data # Unpack the data
+            
+            if is_data:
+                loss_tuples, weight, cps, mu, nu, run_id, event_id, reco_loss_tuples, points, mpe_info = data # Unpack the data
+            else:
+                loss_tuples, weight, cps, mu, nu, run_id, event_id = data # Unpack the data
             loss_tuples = add_loss_sum(loss_tuples, get_valid_checkpoints(cps)) # Pre-calculate loss sums
 
             # Make everything a tuple for memoization
@@ -974,10 +1003,19 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
             cps = tuple([tuple(cp) for cp in cps])
             mu = tuple(mu)
             nu = tuple(nu)
+            data[0] = loss_tuples
+            data[2] = cps
+            data[3] = mu
+            data[4] = nu
 
             # Add points to each histogram
             for hist, func, bins in itertools.izip(hists, points_functions, binnings):
-                ret = func(hist, bins, loss_tuples, weight, cps, mu, nu, run_id, event_id)
+                f_len = len(inspect.getargspec(func).args) - 2
+                if 'kwargs' in inspect.getargspec(func).args:
+                    data.append(kwargs)
+                if f_len > len(data):
+                    raise ValueError('Not enough data to pass to points functions.')
+                ret = func(hist, bins, *(data[:f_len]))
                 if ret:
                     n_good += 1
                 else:
@@ -994,7 +1032,7 @@ def get_hists_from_queue(q, binnings, points_functions, hists, q_n):
     print 'Bad: %d' % n_bad
     return hists
 
-def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n, flux_name, generator, sampling_factor=1.0):
+def get_hists_from_files(infiles, binnings, points_functions, hists, file_range, n, flux_name, generator, sampling_factor=1.0, is_data=False, geo=None, kwargs={}):
     """
     Process information from input files to create histograms
     """
@@ -1008,15 +1046,14 @@ def get_hists_from_files(infiles, binnings, points_functions, hists, file_range,
         except Exception as e:
             print  'Could not create pool'
             print e
-    results = [pool.apply_async(get_hists_from_queue, (q,binnings,points_functions,h,i)) for i,h in enumerate(reader_hists)]
+    results = [pool.apply_async(get_hists_from_queue, (q,binnings,points_functions,h,i,is_data,kwargs)) for i,h in enumerate(reader_hists)]
+    #for result in results:
+    #    result.get()
         
     # Loop over input files
     for f in infiles:
         print 'Looking at new file'
-        #threads = [multiprocessing.Process(target=get_hists_from_reader, args=(r,binnings,points_functions,h)) for r,h in itertools.izip(readers, reader_hists)]
-        pools = file_reader(f, q, 1024**3.0, flux_name, generator, sampling_factor)
-        #reader_hists = [get_hists_from_queue(q, binnings, points_functions, h, i)]
-        #reader_result.get()
+        pools = file_reader(f, q, 1024**3.0, flux_name, generator, sampling_factor, is_data, geo)
         print 'Waiting on file reader'
         for p in pools:
             print 'Waiting on pool'
@@ -1040,7 +1077,7 @@ def get_hists_from_files(infiles, binnings, points_functions, hists, file_range,
     return reader_hists[0]
 
 
-def i3_to_json(infiles, n, flux_name, generator):
+def i3_to_json(infiles, n, flux_name, generator, outdir='', is_data=False, geo=None):
     """
     Process information from input files to create histograms
     """
@@ -1055,12 +1092,13 @@ def i3_to_json(infiles, n, flux_name, generator):
             except Exception as e:
                 print 'Could not create pool'
                 print e
-        json_file_name = f+'.json'
+        json_file_name = outdir+ntpath.basename(f)+'.json'
         result = pool.apply_async(file_writer, (json_file_name, q))
-        pools = file_reader(f, q, 1024**3.0, flux_name, generator)
+        pools = file_reader(f, q, 1024**3.0, flux_name, generator, is_data=is_data, geo=geo)
         for p in pools:
             p.close()
             p.join()
+        q.put('')
         result.get()
         pool.close()
         pool.join()

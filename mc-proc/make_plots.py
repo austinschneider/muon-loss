@@ -2,6 +2,7 @@
 import numpy as np
 
 from icecube import dataclasses
+from icecube.icetray import I3Units
 
 import copy
 import glob
@@ -24,6 +25,7 @@ import json
 # Set up the argument parser
 parser = argparse.ArgumentParser(description='Proccess filenames')
 parser.add_argument('-i', '--infiles', metavar='infiles', type=str, default='')
+parser.add_argument('-g', '--geo', metavar='geo', type=str, default='')
 parser.add_argument('-o', '--outfile', default='')
 parser.add_argument('-f', '--histogram-file', dest='hist_file', default='')
 parser.add_argument('-p', '--plotdir', default='')
@@ -35,10 +37,13 @@ parser.set_defaults(aggregate=False)
 parser.add_argument('-r', '--range', default='')
 parser.add_argument('-n', '--ncores', type=int, default=1)
 parser.add_argument('-s', '--sample', type=float, default=1.0)
+parser.add_argument('-d', '--isdata', type=float, default=1.0)
 
 args = parser.parse_args()
 infile_string = args.infiles.strip('"\'')
 infiles = glob.glob(infile_string)
+geo_string = args.geo.strip('"\'')
+geo = glob.glob(geo_string)[0]
 outfile = args.outfile.strip('"\'')
 print args
 hist_file = args.hist_file.strip('"\'')
@@ -51,11 +56,21 @@ else:
     file_range = [int(i) for i in range.split('-', 1)] # Split into 1 or 2 numbers
 ncores = args.ncores
 sampling_factor = (lambda x: min(x, 1.0/x))(args.sample)
+is_data = args.isdata
 
 #Define the flux and the generator
 
-flux_name = 'honda2006'                                                                                                                     
-generator = weighting.NeutrinoGenerator(1000000, 1000, 1000000, -2, 'NuMu', InjectionMode='Surface')
+flux_name = 'honda2006' 
+#generator = weighting.NeutrinoGenerator(1000000, 1000, 1000000, -2, 'NuMu', InjectionMode='Surface')
+generator = weighting.NeutrinoGenerator(1e5, 200, 1e9, 2, 'NuMu',
+    InjectionMode = 'Surface',
+    ZenithMin = 80*I3Units.deg,
+    ZenithMax = 180*I3Units.deg,
+    AzimuthMin = 0*I3Units.deg,
+    AzimuthMax = 360*I3Units.deg,
+    CylinderRadius = 800*I3Units.meter,
+    CylinderHeight = 1000.*I3Units.m
+    )
 
 def plot(hists, binnings, plot_functions, plotdir):
     """
@@ -88,7 +103,7 @@ if plotdir != '' or outfile != '':
         if aggregate:
             hists, binnings = mlc.aggregate_info_from_files(infiles)
         else:
-            hists = mlc.get_hists_from_files(infiles, binnings, points_functions, hists, file_range, ncores, flux_name, generator, sampling_factor)
+            hists = mlc.get_hists_from_files(infiles, binnings, points_functions, hists, file_range, ncores, flux_name, generator, sampling_factor, is_data, geo)
         if outfile != '':
             mlc.save_info_to_file(outfile, hists, binnings)
     elif len(hist_file) > 0:
