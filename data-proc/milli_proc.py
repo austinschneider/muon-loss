@@ -515,7 +515,7 @@ def deltaE_cut_module(pulse_series=_pulse_series, track=_reco_track, dE=500, len
         return deltaE >= dE
     return f
 
-def run_tray(infiles, outfile, hist_outfile, pulse_series=_pulse_series, reco_track=_reco_track):
+def run_tray(geo, infiles, outfile, hist_outfile, pulse_series=_pulse_series, reco_track=_reco_track):
     print 'Creating tray for: ', (infiles, outfile)
     
     # Instantiate the tray
@@ -652,5 +652,5 @@ if __name__ == '__main__':
         outfile_base = outfile_base[:outfile_base.rfind('.i3')]
         hist_outfile = path.dirname(hist_file) + '/' + outfile_base + '_histograms.pkl'
 
-        run_tray(infiles, outfile, hist_outfile, pulse_series=_pulse_series, reco_track=_reco_track)
+        run_tray(geo, infiles, outfile, hist_outfile, pulse_series=_pulse_series, reco_track=_reco_track)
 
