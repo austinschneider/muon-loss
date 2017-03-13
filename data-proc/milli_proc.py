@@ -3,40 +3,42 @@ import argparse
 import glob
 import os.path as path
 import file_utils
-default_geo = '/data/sim/sim-new/downloads/GCD_09_07_12/GeoCalibDetectorStatus_IC86.55697_corrected_V2.i3.gz'
-default_infiles = '/data/ana/IC79/numu_forward_folding/sim/Alfa/Lnu/IC86/eff0.9900/1.i3.gz'
 
-parser = argparse.ArgumentParser(description='Proccess filenames')
-parser.add_argument('-i', '--infiles', metavar='infiles', type=str, default=default_infiles)
-parser.add_argument('-g', '--geo', metavar='geo', type=str, default=default_geo)
-parser.add_argument('-o', '--outdir', default='')
-parser.add_argument('-f', '--histogram-file', dest='hist_file', default='./histogram_output')
+if __name__ == '__main__':
+    default_geo = '/data/sim/sim-new/downloads/GCD_09_07_12/GeoCalibDetectorStatus_IC86.55697_corrected_V2.i3.gz'
+    default_infiles = '/data/ana/IC79/numu_forward_folding/sim/Alfa/Lnu/IC86/eff0.9900/1.i3.gz'
 
-parser.add_argument('-r', '--range', default='')
-parser.add_argument('-s', '--sample', type=float, default=1.0)
-parser.add_argument('-d', '--isdata', type=float, default=1.0)
+    parser = argparse.ArgumentParser(description='Proccess filenames')
+    parser.add_argument('-i', '--infiles', metavar='infiles', type=str, default=default_infiles)
+    parser.add_argument('-g', '--geo', metavar='geo', type=str, default=default_geo)
+    parser.add_argument('-o', '--outdir', default='')
+    parser.add_argument('-f', '--histogram-file', dest='hist_file', default='./histogram_output')
 
-args = parser.parse_args()
-infile_string = args.infiles.strip('"\'')
-infiles = glob.glob(infile_string)
-file_utils.sort_nicely(infiles)
-geo_string = args.geo.strip('"\'')
-geo = glob.glob(geo_string)[0]
-outdir = args.outdir.strip('"\'')
-hist_file = args.hist_file.strip('"\'')
-file_range = args.range.translate(None, '\\/:!@#$%Z^&*()+=`;"\'?><,|{}_ ') # Remove anything weird before storing
-if file_range == '':
-    file_range = None
-else:
-    file_range = [int(i) for i in file_range.split('-', 1)] # Split into 1 or 2 numbers
-sampling_factor = (lambda x: min(x, 1.0/x))(args.sample)
-is_data = args.isdata
+    parser.add_argument('-r', '--range', default='')
+    parser.add_argument('-s', '--sample', type=float, default=1.0)
+    parser.add_argument('-d', '--isdata', type=float, default=1.0)
 
-print args
-print 'all infiles: %s' % str(infiles)
+    args = parser.parse_args()
+    infile_string = args.infiles.strip('"\'')
+    infiles = glob.glob(infile_string)
+    file_utils.sort_nicely(infiles)
+    geo_string = args.geo.strip('"\'')
+    geo = glob.glob(geo_string)[0]
+    outdir = args.outdir.strip('"\'')
+    hist_file = args.hist_file.strip('"\'')
+    file_range = args.range.translate(None, '\\/:!@#$%Z^&*()+=`;"\'?><,|{}_ ') # Remove anything weird before storing
+    if file_range == '':
+        file_range = None
+    else:
+        file_range = [int(i) for i in file_range.split('-', 1)] # Split into 1 or 2 numbers
+    sampling_factor = (lambda x: min(x, 1.0/x))(args.sample)
+    is_data = args.isdata
 
-file_pairs = file_utils.get_output_files(infiles, outdir, mkdir=False, file_range=file_range)
-print file_pairs
+    print args
+    print 'all infiles: %s' % str(infiles)
+
+    file_pairs = file_utils.get_output_files(infiles, outdir, mkdir=False, file_range=file_range)
+    print file_pairs
 
 # Millipede imports
 from I3Tray import *
@@ -52,8 +54,48 @@ import numpy as np
 import pickle
 import histogram
 
-pulse_series = 'TTPulses'
-reco_track = 'MPEFit_TT'
+_pulse_series = 'TTPulses'
+_reco_track = 'MPEFit_TT'
+
+# Initialize the flux and generator for the sample
+# Parameters below are for /data/ana/IC79/numu_forward_folding/sim/Alfa/Lnu/IC86/eff0.9900/
+_flux_name = 'honda2006'
+_flux = NewNuFlux.makeFlux(_flux_name).getFlux
+_generator = weighting.NeutrinoGenerator(1e5, 200, 1e9, 2, 'NuMu',
+    InjectionMode = 'Surface',
+    ZenithMin = 80*I3Units.deg,
+    ZenithMax = 180*I3Units.deg,
+    AzimuthMin = 0*I3Units.deg,
+    AzimuthMax = 360*I3Units.deg,
+    CylinderRadius = 800*I3Units.meter,
+    CylinderHeight = 1000.*I3Units.m
+)
+
+# Initialize photon table services
+table_base = os.path.expandvars('$I3_DATA/photon-tables/splines/emu_%s.fits')
+_muon_service = photonics_service.I3PhotoSplineService(table_base % 'abs', table_base % 'prob', 0)
+table_base = os.path.expandvars('$I3_DATA/photon-tables/splines/ems_spice1_z20_a10.%s.fits')
+_cascade_service = photonics_service.I3PhotoSplineService(table_base % 'abs', table_base % 'prob', 0)
+    
+def init(pulse_series=None, reco_track=None, flux=None, generator=None, muon_service=None, cascade_service=None):
+    if pulse_series is not None:
+        global _pulse_series
+        _pulse_series = pulse_series
+    if reco_track is not None:
+        global _reco_track
+        _reco_track = reco_track
+    if flux is not None:
+        global _flux
+        _flux = flux
+    if generator is not None:
+        global _generator
+        _generator = generator
+    if muon_service is not None:
+        global _muon_service
+        _muon_service = muon_service
+    if cascade_service is not None:
+        global _cascade_service
+        _cascade_service = cascade_service
 
 # Ensures that a module only sees P frames
 def phys(f):
@@ -105,20 +147,6 @@ def get_cut_map_signatures(frame, cut_maps):
     sigs = [tuple(sig) for sig in sigs]
     return sigs
 
-# Initialize the flux and generator for the sample
-# Parameters below are for /data/ana/IC79/numu_forward_folding/sim/Alfa/Lnu/IC86/eff0.9900/
-flux_name = 'honda2006'
-flux = NewNuFlux.makeFlux(flux_name).getFlux
-generator = weighting.NeutrinoGenerator(1e5, 200, 1e9, 2, 'NuMu',
-    InjectionMode = 'Surface',
-    ZenithMin = 80*I3Units.deg,
-    ZenithMax = 180*I3Units.deg,
-    AzimuthMin = 0*I3Units.deg,
-    AzimuthMax = 360*I3Units.deg,
-    CylinderRadius = 800*I3Units.meter,
-    CylinderHeight = 1000.*I3Units.m
-)
-
 # Gets the weight of the neutrino event
 def get_weight(frame):
     nu = frame['TrueNuTrack'] 
@@ -145,7 +173,7 @@ def make_track_collection():
     return collection
 
 # Compute and add track information to a set of histogram collections
-def track_histogram_module(collections, pulse_series=pulse_series, track=reco_track, length=600, cut_maps=[]):
+def track_histogram_module(collections, pulse_series=_pulse_series, track=_reco_track, length=600, cut_maps=[]):
     @phys
     def f(frame):
         if track  not in frame.keys():
@@ -314,8 +342,9 @@ def pre_milli_time_shift_module(track):
         frame[track] = basep
     return f
 
-# Module to cut on the number of hits in icecube doms (no deepcore)
-def n_hits_cut_module(n_hits=25, pulse_series=pulse_series):
+# Module to cut on the number of hits in icecube doms
+# Default mask: no deepcore hits included
+def n_hits_cut_module(n_hits=25, pulse_series=_pulse_series, om_mask=(lambda om_series_pair: om_series_pair[0].string <= 78)):
     def f(frame):
         if pulse_series not in frame.keys():
             return
@@ -324,13 +353,13 @@ def n_hits_cut_module(n_hits=25, pulse_series=pulse_series):
             frame_pulse_series = frame_pulse_series.apply(frame)
         assert type(frame_pulse_series) == icecube.dataclasses.I3RecoPulseSeriesMap
 
-        number_of_hits = len([p for p in frame_pulse_series if p[0].string <= 78])
+        number_of_hits = len([p for p in frame_pulse_series if om_mask(p)])
 
         return number_of_hits >= n_hits
     return f
 
 # Module to store the geometric track bounds
-def geometric_length_cut_module(geo='I3Geometry', track=reco_track, length=600):
+def geometric_length_cut_module(geo='I3Geometry', track=_reco_track, length=600):
     @phys
     def f(frame):
         if track not in frame.keys():
@@ -347,7 +376,7 @@ def geometric_length_cut_module(geo='I3Geometry', track=reco_track, length=600):
     return f
 
 # Module to add the time window expected by millipede
-def time_window_module(pulse_series=pulse_series):
+def time_window_module(pulse_series=_pulse_series):
     @phys
     def add_time_window(frame):
         frame_key = pulse_series + 'TimeRange'
@@ -370,17 +399,13 @@ def map_cut_module(map_name):
     def f(frame):
         return np.any(frame[map_name].values())
     return f
-table_base = os.path.expandvars('$I3_DATA/photon-tables/splines/emu_%s.fits')
-muon_service = photonics_service.I3PhotoSplineService(table_base % 'abs', table_base % 'prob', 0)
-table_base = os.path.expandvars('$I3_DATA/photon-tables/splines/ems_spice1_z20_a10.%s.fits')
-cascade_service = photonics_service.I3PhotoSplineService(table_base % 'abs', table_base % 'prob', 0)
-    
+
 # Adds the time window and millipede modules to the tray
-def add_millipede_module(tray, pulse_series=pulse_series, seed_track=reco_track):
-    tray.Add(time_window_module(pulse_series=pulse_series))
+def add_millipede_module(tray, pulse_series=_pulse_series, seed_track=_reco_track):
+    tray.Add(time_window_module(pulse_series=_pulse_series))
     millipede_key = 'MillipedeHighEnergy'+pulse_series+seed_track
     tray.Add('MuMillipede', 'millipede_highenergy_'+pulse_series+'_'+seed_track,
-            MuonPhotonicsService=muon_service, CascadePhotonicsService=cascade_service,
+            MuonPhotonicsService=_muon_service, CascadePhotonicsService=_cascade_service,
             PhotonsPerBin=15, MuonRegularization=0, ShowerRegularization=0,
             MuonSpacing=0, ShowerSpacing=10, SeedTrack=seed_track,
             Output='MillipedeHighEnergy'+pulse_series+seed_track, Pulses=pulse_series)
@@ -406,7 +431,7 @@ def get_track_bounds(frame, pulse_series, track):
     return (min(pos_candidates, key=pos_key), max(pos_candidates, key=pos_key))
 
 # Define the bounds of the track by Cherenkov position
-def track_bounds_module(pulse_series=pulse_series, track=reco_track):
+def track_bounds_module(pulse_series=_pulse_series, track=_reco_track):
     @phys
     def f(frame):
         if track not in frame.keys():
@@ -418,7 +443,7 @@ def track_bounds_module(pulse_series=pulse_series, track=reco_track):
 
 # Define the position we want to consider as the start of the track
 # Goes 100m from the first reconstructed loss, goes to the edge of the detector if this point is outside
-def track_start_module(pulse_series=pulse_series, track=reco_track, losses=None):
+def track_start_module(pulse_series=_pulse_series, track=_reco_track, losses=None):
     millipede_key = 'MillipedeHighEnergy'+pulse_series+track
     track_start_key = 'TrackStart'+pulse_series+track
     if losses is not None:
@@ -446,7 +471,7 @@ def track_start_module(pulse_series=pulse_series, track=reco_track, losses=None)
 
 # Cut on the considered track length
 # We consider 100m from the first reconstructed loss to the geometric exit point
-def track_length_cut_module(pulse_series=pulse_series, track=reco_track, length=600., losses=None):
+def track_length_cut_module(pulse_series=_pulse_series, track=_reco_track, length=600., losses=None):
     millipede_key = 'MillipedeHighEnergy'+pulse_series+track
     track_start_key = 'TrackStart'+pulse_series+track
     track_end_key = 'TrackGeoBoundsEnd'+track
@@ -463,7 +488,7 @@ def track_length_cut_module(pulse_series=pulse_series, track=reco_track, length=
     return f
 
 # Cut on the reconstructed DeltaE in some length of the track
-def deltaE_cut_module(pulse_series=pulse_series, track=reco_track, dE=500, length=600, center=False, losses=None):
+def deltaE_cut_module(pulse_series=_pulse_series, track=_reco_track, dE=500, length=600, center=False, losses=None):
     millipede_key = 'MillipedeHighEnergy'+pulse_series+track
     track_start_key = 'TrackStart'+pulse_series+track
     track_end_key = 'TrackGeoBoundsEnd'+track
@@ -490,16 +515,14 @@ def deltaE_cut_module(pulse_series=pulse_series, track=reco_track, dE=500, lengt
         return deltaE >= dE
     return f
 
-for pair in file_pairs:
-    print 'Creating tray for: ', pair
-    infiles, outfile = pair
-    outfile_base = path.basename(outfile)
-    outfile_base = outfile_base[:outfile_base.rfind('.i3')]
-    hist_outfile = path.dirname(hist_file) + '/' + outfile_base + '_histograms.pkl'
+def run_tray(infiles, outfile, hist_outfile, pulse_series=_pulse_series, reco_track=_reco_track):
+    print 'Creating tray for: ', (infiles, outfile)
+    
     # Instantiate the tray
     tray = I3Tray()
     tray.Add("I3Reader", "my_reader", FilenameList=[geo]+infiles)
     #tray.Add(lambda frame: random.random() <= sampling_factor)
+
     # Ensure everything is there
     tray.Add(phys(counter(lambda frame: frame.Has('I3Geometry'))))
     tray.Add(phys(counter(lambda frame: frame.Has('I3MCTree'))))
@@ -508,7 +531,7 @@ for pair in file_pairs:
     tray.Add(phys(counter(lambda frame: frame.Has(pulse_series))))
 
     # N hits cut
-    tray.Add(n_hits_cut_module(n_hits=25))
+    tray.Add(counter(n_hits_cut_module(pulse_series=pulse_series, n_hits=25)))
 
     # Add the MC Truth Track
     tray.Add(phys(set_mc_truth_track))
@@ -518,54 +541,54 @@ for pair in file_pairs:
     tray.Add(map_module('GeoLengthCutMap', dataclasses.I3MapStringBool))
     tray.Add(store_in_map(geometric_length_cut_module(track=reco_track), label=reco_track+'GeoLength', map_name='GeoLengthCutMap'))
     tray.Add(store_in_map(geometric_length_cut_module(track='TrueMuonTrack'), label='TrueGeoLength', map_name='GeoLengthCutMap'))
-    tray.Add(map_cut_module('GeoLengthCutMap'))
+    tray.Add(counter(map_cut_module('GeoLengthCutMap')))
 
     # Track Cherenkov bounds
-    tray.Add(track_bounds_module(track=reco_track))
-    tray.Add(track_bounds_module(track='TrueMuonTrack'))
+    tray.Add(track_bounds_module(pulse_series=pulse_series, track=reco_track))
+    tray.Add(track_bounds_module(pulse_series=pulse_series, track='TrueMuonTrack'))
 
     # Millipede
-    add_millipede_module(tray, seed_track=reco_track)
-    add_millipede_module(tray, seed_track='TrueMuonTrack')
+    add_millipede_module(tray, pulse_series=pulse_series, seed_track=reco_track)
+    add_millipede_module(tray, pulse_series=pulse_series, seed_track='TrueMuonTrack')
 
     # Track start
-    tray.Add(track_start_module(track=reco_track))
-    tray.Add(track_start_module(track='TrueMuonTrack'))
-    tray.Add(track_start_module(track='TrueMuonTrack', losses='TrueMuonLosses'))
+    tray.Add(track_start_module(pulse_series=pulse_series, track=reco_track))
+    tray.Add(track_start_module(pulse_series=pulse_series, track='TrueMuonTrack'))
+    tray.Add(track_start_module(pulse_series=pulse_series, track='TrueMuonTrack', losses='TrueMuonLosses'))
 
     # Track length cuts
     tray.Add(map_module('LengthCutMap', dataclasses.I3MapStringBool))
-    tray.Add(store_in_map(track_length_cut_module(track=reco_track), label=reco_track+'Length', map_name='LengthCutMap'))
-    tray.Add(store_in_map(track_length_cut_module(track='TrueMuonTrack'), label='TrueLength', map_name='LengthCutMap'))
-    tray.Add(map_cut_module('LengthCutMap'))
+    tray.Add(store_in_map(track_length_cut_module(pulse_series=pulse_series, track=reco_track), label=reco_track+'Length', map_name='LengthCutMap'))
+    tray.Add(store_in_map(track_length_cut_module(pulse_series=pulse_series, track='TrueMuonTrack'), label='TrueLength', map_name='LengthCutMap'))
+    tray.Add(counter(map_cut_module('LengthCutMap')))
 
     # Compute track histograms before energy cuts
     reco_track_collections = dict()
-    tray.Add(track_histogram_module(reco_track_collections, track=reco_track, cut_maps=['GeoLengthCutMap', 'LengthCutMap']))
+    tray.Add(track_histogram_module(reco_track_collections, pulse_series=pulse_series, track=reco_track, cut_maps=['GeoLengthCutMap', 'LengthCutMap']))
     true_track_collections = dict()
-    tray.Add(track_histogram_module(true_track_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap']))
+    tray.Add(track_histogram_module(true_track_collections, pulse_series=pulse_series, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap']))
 
     # Delta E cuts
     tray.Add(map_module('DeltaECutMap', dataclasses.I3MapStringBool))
-    tray.Add(store_in_map(deltaE_cut_module(track=reco_track, dE=300, center=False), label=reco_track+'StartDeltaE300', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track=reco_track, dE=500, center=False), label=reco_track+'StartDeltaE500', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track=reco_track, dE=700, center=False), label=reco_track+'StartDeltaE700', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track=reco_track, dE=300, center=True), label=reco_track+'CenterDeltaE300', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track=reco_track, dE=500, center=True), label=reco_track+'CenterDeltaE500', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track=reco_track, dE=700, center=True), label=reco_track+'CenterDeltaE700', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=300, center=False), label='MCTMilliStartDeltaE300', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=500, center=False), label='MCTMilliStartDeltaE500', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=700, center=False), label='MCTMilliStartDeltaE700', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=300, center=True), label='MCTMilliCenterDeltaE300', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=500, center=True), label='MCTMilliCenterDeltaE500', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=700, center=True), label='MCTMilliCenterDeltaE700', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=300, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE300', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=500, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE500', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=700, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE700', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=300, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE300', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=500, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE500', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(track='TrueMuonTrack', dE=700, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE700', map_name='DeltaECutMap'))
-    tray.Add(map_cut_module('DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track=reco_track, dE=300, center=False), label=reco_track+'StartDeltaE300', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track=reco_track, dE=500, center=False), label=reco_track+'StartDeltaE500', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track=reco_track, dE=700, center=False), label=reco_track+'StartDeltaE700', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track=reco_track, dE=300, center=True), label=reco_track+'CenterDeltaE300', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track=reco_track, dE=500, center=True), label=reco_track+'CenterDeltaE500', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track=reco_track, dE=700, center=True), label=reco_track+'CenterDeltaE700', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=300, center=False), label='MCTMilliStartDeltaE300', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=500, center=False), label='MCTMilliStartDeltaE500', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=700, center=False), label='MCTMilliStartDeltaE700', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=300, center=True), label='MCTMilliCenterDeltaE300', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=500, center=True), label='MCTMilliCenterDeltaE500', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=700, center=True), label='MCTMilliCenterDeltaE700', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=300, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE300', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=500, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE500', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=700, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE700', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=300, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE300', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=500, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE500', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=700, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE700', map_name='DeltaECutMap'))
+    tray.Add(counter(map_cut_module('DeltaECutMap')))
 
     # Compute energy histograms using first 600m of track
     reco_start_energy_collections = dict()
@@ -588,6 +611,9 @@ for pair in file_pairs:
     tray.Add(track_histogram_module(reco_track_postcut_collections, pulse_series=pulse_series, track=reco_track, cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap']))
     true_track_postcut_collections = dict()
     tray.Add(track_histogram_module(true_track_postcut_collections, pulse_series=pulse_series, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap']))
+
+    # Counter
+    tray.Add(counter(lambda x: True, const=True))
 
     # Save the frames
     tray.AddModule('I3Writer', 'writer', filename=outfile, DropOrphanStreams=[icetray.I3Frame.DAQ])
@@ -617,3 +643,14 @@ for pair in file_pairs:
     outpickle = open(hist_outfile, 'wb')
     pickle.dump(output_dict, outpickle, -1)
     outpickle.close()
+
+
+if __name__ == '__main__':
+    for pair in file_pairs:
+        infiles, outfile = pair
+        outfile_base = path.basename(outfile)
+        outfile_base = outfile_base[:outfile_base.rfind('.i3')]
+        hist_outfile = path.dirname(hist_file) + '/' + outfile_base + '_histograms.pkl'
+
+        run_tray(infiles, outfile, hist_outfile, pulse_series=_pulse_series, reco_track=reco_track)
+
