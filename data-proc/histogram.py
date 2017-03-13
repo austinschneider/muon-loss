@@ -8,6 +8,9 @@ class histogram_nd(object):
                 setattr(self, key, internals[key])
             return
 
+        self.add_calls = 0
+        self.entries = 0
+
         self.n = n
         self.bins = np.array(bins)
         self.size = len(bins) - 1
@@ -35,6 +38,8 @@ class histogram_nd(object):
         return self.__dict__
 
     def add(self, x, y, weights, bin=None):
+        self.add_calls += 1
+        self.entries += len(x)
         if self.store_data:
             if len(y) != len(self.y_data):
                 raise ValueError("y length must match y_data!")
