@@ -652,5 +652,5 @@ if __name__ == '__main__':
         outfile_base = outfile_base[:outfile_base.rfind('.i3')]
         hist_outfile = path.dirname(hist_file) + '/' + outfile_base + '_histograms.pkl'
 
-        run_tray(infiles, outfile, hist_outfile, pulse_series=_pulse_series, reco_track=reco_track)
+        run_tray(infiles, outfile, hist_outfile, pulse_series=_pulse_series, reco_track=_reco_track)
 
