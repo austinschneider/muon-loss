@@ -154,7 +154,7 @@ def get_weight(frame):
     nu_cos_zenith = np.cos(nu.dir.zenith)
     nu_p_int = weight_dict['TotalInteractionProbabilityWeight']
     nu_unit = I3Units.cm2/I3Units.m2
-    nu_weight = nu_p_int*(flux(nu.type, nu.energy, nu_cos_zenith)/nu_unit)/generator(nu.energy, nu.type, nu_cos_zenith)
+    nu_weight = nu_p_int*(_flux(nu.type, nu.energy, nu_cos_zenith)/nu_unit)/_generator(nu.energy, nu.type, nu_cos_zenith)
     return nu_weight
 
 # Create a collection of histograms for track information
