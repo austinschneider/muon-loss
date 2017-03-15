@@ -107,6 +107,8 @@ class histogram_nd(object):
         self.y_weighted += hist.y_weighted
         self.x2_weighted += hist.x2_weighted
         self.y2_weighted += hist.y2_weighted
+        self.add_calls += hist.add_calls
+        self.entries += hist.entries
 
     def get_w(self):
         w = np.copy(self.weights)
