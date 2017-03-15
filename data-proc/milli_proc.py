@@ -149,12 +149,26 @@ def get_cut_map_signatures(frame, cut_maps):
 
 # Gets the weight of the neutrino event
 def get_weight(frame):
-    nu = frame['TrueNuTrack'] 
+    tree = frame['I3MCTree']
+    nu = tree.get_primary(frame['TrueMuonTrack'])
     weight_dict = frame['I3MCWeightDict']
     nu_cos_zenith = np.cos(nu.dir.zenith)
     nu_p_int = weight_dict['TotalInteractionProbabilityWeight']
     nu_unit = I3Units.cm2/I3Units.m2
-    nu_weight = nu_p_int*(_flux(nu.type, nu.energy, nu_cos_zenith)/nu_unit)/_generator(nu.energy, nu.type, nu_cos_zenith)
+    gen_w = _generator(nu.energy, nu.type, nu_cos_zenith)
+    if gen_w <= 0:
+        print
+        print
+        print 'I3EventHeader', frame['I3EventHeader']
+        print 'I3MCTreeGen', frame['I3MCTreeGen']
+        print 'I3MCWeightDict', frame['I3MCWeightDict']
+        print 'TrueMuonTrack', frame['TrueMuonTrack']
+        print 'TrueNuTrack', frame['TrueNuTrack']
+        print 'MMCTrackList'
+        for t in frame['MMCTrackList']:
+            print t.particle
+        return None
+    nu_weight = nu_p_int*(_flux(nu.type, nu.energy, nu_cos_zenith)/nu_unit)/gen_w
     return nu_weight
 
 # Create a collection of histograms for track information
@@ -186,6 +200,13 @@ def track_histogram_module(collections, pulse_series=_pulse_series, track=_reco_
 
         weight = get_weight(frame)
 
+        if weight is None:
+            print 'track_histogram_module'
+            print track, frame[track]
+            print
+            print
+            return
+
         def add(l, x, y=[1]):
             for sig in sigs:
                 collections[sig][l].add(x,y,[weight])
@@ -202,8 +223,8 @@ def track_histogram_module(collections, pulse_series=_pulse_series, track=_reco_
         add('zcap', [origin_cap.z])
 
         track_start = 'TrackStart' + pulse_series + track
-        track_geo_start = 'TrackGeoBoundsStart' + pulse_series + track
-        track_geo_end = 'TrackGeoBoundsEnd' + pulse_series + track
+        track_geo_start = 'TrackGeoBoundsStart' + track
+        track_geo_end = 'TrackGeoBoundsEnd' + track
         track_c_start = 'TrackBoundsStart' + pulse_series + track
         track_c_end = 'TrackBoundsEnd' + pulse_series + track
 
@@ -256,6 +277,13 @@ def energy_histogram_module(collections, pulse_series, track, cut_maps=[], lengt
                 collections[sig] = make_energy_collection()
 
         weight = get_weight(frame)
+
+        if weight is None:
+            print 'energy_histogram_module'
+            print track, frame[track]
+            print 
+            print 
+            return
 
         def add(l, x, y=[1], w=[weight]):
             for sig in sigs:
@@ -323,7 +351,6 @@ def set_mc_truth_track(frame):
 
     frame['TrueMuonLosses'] = true_losses
     frame['TrueMuonTrack'] = muon_track.particle
-    frame['TrueNuTrack'] = nu
 
 # Module to shift the position and time of a track to something that looks reasonable to millipede
 def pre_milli_time_shift_module(track):
