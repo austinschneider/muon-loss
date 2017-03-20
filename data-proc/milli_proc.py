@@ -161,7 +161,7 @@ class muon_energy_info:
         for i in xrange(0, len(self.valid_checkpoints)-1):
             cp1 = self.valid_checkpoints[i]
             cp2 = self.valid_checkpoints[i+1]
-            first_index = next(itertools.dropwhile(lambda l: l[1][1] <= cp1[1], enumerate(self.losses)))[0]
+            first_index = next(itertools.dropwhile(lambda l: l[1][1] <= cp1[1], enumerate(self.losses)), [-1])[0]
             last_index = len(self.losses) - 1 - next(itertools.dropwhile(lambda l: l[1][1] >= cp2[1], enumerate(reversed(self.losses))), [0])[0]
 
             if last_index < 0:
