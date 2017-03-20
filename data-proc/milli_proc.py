@@ -3,6 +3,7 @@ import argparse
 import glob
 import os.path as path
 import file_utils
+import itertools
 
 if __name__ == '__main__':
     default_geo = '/data/sim/sim-new/downloads/GCD_09_07_12/GeoCalibDetectorStatus_IC86.55697_corrected_V2.i3.gz'
