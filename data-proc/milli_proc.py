@@ -121,6 +121,95 @@ def counter(func, const=False):
             return res 
     return f
 
+class muon_energy_info:
+    def __init__(self, muon_track, muon_p, muon_losses):
+        # Create loss tuples
+        self.losses = sorted([[loss.energy, abs(loss.pos - muon_p.pos), int(loss.type)] for loss in muon_losses], key=lambda x: x[1])
+
+        # Create checkpoints
+        self.checkpoints = [(muon_p.energy, 0)]
+
+        muon_pos_i = dataclasses.I3Position(muon_track.xi, muon_track.yi, muon_track.zi)
+        self.checkpoints.append((muon_track.Ei, abs(muon_pos_i - muon_p.pos)))
+
+        muon_pos_c = dataclasses.I3Position(muon_track.xc, muon_track.yc, muon_track.zc)
+        self.checkpoints.append((muon_track.Ec, abs(muon_pos_c - muon_p.pos)))
+
+        muon_pos_f = dataclasses.I3Position(muon_track.xf, muon_track.yf, muon_track.zf)
+        self.checkpoints.append((muon_track.Ef, abs(muon_pos_f - muon_p.pos)))
+
+        self.checkpoints.append((0, muon_p.length))
+
+        # Assign valid checkpoints
+        track_cps = self.checkpoints[1:-1]
+        self.valid_checkpoints = [self.checkpoints[0]] + [cp for cp in track_cps if cp[0] > 0] + [self.checkpoints[-1]]
+        self.valid_checkpoints = sorted(self.valid_checkpoints, key=lambda x: x[1])
+        
+        # Add loss sums to losses
+        next_dist = 0
+        total = 0
+        for j in xrange(len(self.losses)):
+            if self.losses[j][1] >= next_dist:
+                next_dist = next(itertools.dropwhile(lambda cp: cp[1] <= self.losses[j][1], self.valid_checkpoints), (None, np.inf))[1]
+                total = 0
+            total += self.losses[j][0]
+            self.losses[j] = tuple(self.losses[j] + [total])
+
+        self.loss_rates = []
+        self.loss_ranges = []
+        for i in xrange(0, len(self.valid_checkpoints)-1):
+            cp1 = self.valid_checkpoints[i]
+            cp2 = self.valid_checkpoints[i+1]
+            first_index = next(itertools.dropwhile(lambda l: l[1][1] <= cp1[1], enumerate(self.losses)))[0]
+            last_index = len(self.losses) - 1 - next(itertools.dropwhile(lambda l: l[1][1] >= cp2[1], enumerate(reversed(self.losses))), [0])[0]
+
+            if last_index < 0:
+                total_stochastic_loss = 0
+            else:
+                total_stochastic_loss = self.losses[last_index][3]
+            loss_rate = (cp1[0] - cp2[0] - total_stochastic_loss) / (cp2[1] - cp1[1])
+            self.loss_rates.append(loss_rate)
+            self.loss_ranges.append((first_index, last_index+1))
+
+    def get_energy(self, x):
+        """  
+        Get the energy of a muon track at a point x.
+        Given energy checkpoints and losses along track.
+        """
+        # Get the checkpoints on either side of x, search by distance
+        cp2_i = next(itertools.dropwhile(lambda elem: elem[1][1] < x, self.valid_checkpoints), [-1])[0]
+
+        # Return muon energy before track begins, return 0 beyond track
+        if cp2_i == 0:
+            return self.checkpoints[0][0]
+        if cp2_i < 0:
+            return 0
+
+        cp1_i = cp2_i - 1
+        cp1 = self.valid_checkpoints(cp1_i)
+        cp2 = self.valid_checkpoints(cp2_i)
+
+        if x == cp1[1]:
+            return cp1[0]
+        if x == cp2[1]:
+            return cp2[0]
+
+        # Get the loss rate and losses between the checkpoints
+        loss_rate = self.loss_rates[cp1_i]
+        losses_begin, losses_end = self.loss_ranges[cp1_i]
+
+        # Get the sum of losses between x and the checkpoint before x
+        stoch_loss_since_cp1 = 0
+        if losses_begin != losses_end:
+            i_loss_before_x = next(itertools.dropwhile(lambda loss: loss[1][1] <= x, enumerate(self.losses[losses_begin:losses_end])), [losses_end-losses_begin])[0] - 1
+            if i_loss_before_x >= 0:
+                stoch_loss_since_cp1 = self.losses[loss_begin+i_loss_before_x][3]
+
+        # (E at last cp) - (stoch losses since last cp) - (loss rate * distance from last cp)
+        energy = cp1[0] - stoch_loss_since_cp1 - (x - cp1[1]) * loss_rate
+
+        return energy
+
 # Stores the result of a function in an I3Map
 # Useful for storing results of different cuts
 def store_in_map(func, label=None, map_name='CutMap'):
@@ -314,6 +403,77 @@ def energy_histogram_module(collections, pulse_series, track, cut_maps=[], lengt
             point_dE.append(bin_dE)
             point_frac_dE.append(bin_dE / deltaE)
             point_x.append(bins[i])
+        add('frac_loss', point_x, [point_frac_dE, point_dE], w=[weight]*len(point_frac_dE))
+    return f
+
+# Compute and add energy information to a set of histogram collections
+def true_energy_histogram_module(collections, track='TrueMuonTrack', cut_maps=[], track_start_key=None, track_end_key=None, length=600, center=False, losses='TrueMuonTrack'):
+    if track_end_key is None:
+        track_end_key = 'TrackGeoBoundsEnd'+track
+    if track_start_key is None:
+        track_start_key = 'TrackStart' + losses
+    @phys
+    def f(frame):
+        if track not in frame.keys() or losses not in frame.keys():
+            return False
+        if frame[track_start_key] is None or frame[track_end_key] is None:
+            return False
+        sigs = get_cut_map_signatures(frame, cut_maps)
+        keys = collections.keys()
+        for sig in sigs:
+            if sig not in keys:
+                collections[sig] = make_energy_collection()
+
+        weight = get_weight(frame)
+
+        if weight is None:
+            print 'energy_histogram_module'
+            print track, frame[track]
+            print 
+            print 
+            return
+
+        def add(l, x, y=[1], w=[weight]):
+            for sig in sigs:
+                collections[sig][l].add(x,y,w)
+                    
+        muon_p = frame[track]
+        muon_track = [t for t in frame['MMCTrackList'] if t.particle.id == muon_p.id][0]
+        muon_losses = frame[losses]
+
+        track_start = frame[track_start_key]
+        track_end = frame[track_end_key]
+
+        track_start_d = (track_start - muon_p.pos)*muon_p.dir
+        track_end_d = (track_end - muon_p.pos)*muon_p.dir
+
+        if center:
+            start = track_start_d + (abs(track_end_d - track_start_d) - length) / 2.0
+        else:
+            start = track_start_d
+        end = start + length
+
+        me_info = muon_energy_info(muon_track, muon_p, muon_losses)
+
+        deltaE = me_info.get_energy(start) - me_info.get_energy(end)
+            
+        add('deltaE', [deltaE])
+        if(deltaE == 0): 
+            return
+
+        dx = 60
+        bins = np.linspace(0,length,length/dx+1)
+        point_frac_dE = []
+        point_dE = []
+        point_x = []
+        e0 = me_info.get_energy(start)
+        for i in xrange(len(bins)-1):
+            e1 = me_info.get_energy(start + bins[i+1])
+            bin_dE = e0 - e1
+            point_dE.append(bin_dE)
+            point_frac_dE.append(bin_dE / deltaE)
+            point_x.append(bins[i])
+            e0 = e1
         add('frac_loss', point_x, [point_frac_dE, point_dE], w=[weight]*len(point_frac_dE))
     return f
 
@@ -542,6 +702,40 @@ def deltaE_cut_module(pulse_series=_pulse_series, track=_reco_track, dE=500, len
         return deltaE >= dE
     return f
 
+def true_deltaE_cut_module(track='TrueMuonTrack', track_start_key=None, track_end_key=None,dE=500, length=600, center=False, losses='TrueMuonTrack'):
+    if track_end_key is None:
+        track_end_key = 'TrackGeoBoundsEnd'+track
+    if track_start_key is None:
+        track_start_key = 'TrackStart' + losses
+    @phys
+    def f(frame):
+        if track not in frame.keys() or losses not in frame.keys():
+            return False
+        if frame[track_start_key] is None or frame[track_end_key] is None:
+            return False
+        muon_p = frame[track]
+        muon_track = [t for t in frame['MMCTrackList'] if t.particle.id == muon_p.id][0]
+        muon_losses = frame[losses]
+
+        track_start = frame[track_start_key]
+        track_end = frame[track_end_key]
+
+        track_start_d = (track_start - muon_p.pos)*muon_p.dir
+        track_end_d = (track_end - muon_p.pos)*muon_p.dir
+
+        if center:
+            start = track_start_d + (abs(track_end_d - track_start_d) - length) / 2.0
+        else:
+            start = track_start_d
+        end = start + length
+
+        me_info = muon_energy_info(muon_track, muon_p, muon_losses)
+
+        deltaE = me_info.get_energy(start) - me_info.get_energy(end)
+        return deltaE >= dE
+    return f
+    
+
 def run_tray(geo, infiles, outfile, hist_outfile, pulse_series=_pulse_series, reco_track=_reco_track):
     print 'Creating tray for: ', (infiles, outfile)
     
@@ -609,12 +803,12 @@ def run_tray(geo, infiles, outfile, hist_outfile, pulse_series=_pulse_series, re
     tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=300, center=True), label='MCTMilliCenterDeltaE300', map_name='DeltaECutMap'))
     tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=500, center=True), label='MCTMilliCenterDeltaE500', map_name='DeltaECutMap'))
     tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=700, center=True), label='MCTMilliCenterDeltaE700', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=300, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE300', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=500, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE500', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=700, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE700', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=300, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE300', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=500, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE500', map_name='DeltaECutMap'))
-    tray.Add(store_in_map(deltaE_cut_module(pulse_series=pulse_series, track='TrueMuonTrack', dE=700, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE700', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(true_deltaE_cut_module(track='TrueMuonTrack', dE=300, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE300', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(true_deltaE_cut_module(track='TrueMuonTrack', dE=500, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE500', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(true_deltaE_cut_module(track='TrueMuonTrack', dE=700, center=False, losses='TrueMuonLosses'), label='MCTStartDeltaE700', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(true_deltaE_cut_module(track='TrueMuonTrack', dE=300, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE300', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(true_deltaE_cut_module(track='TrueMuonTrack', dE=500, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE500', map_name='DeltaECutMap'))
+    tray.Add(store_in_map(true_deltaE_cut_module(track='TrueMuonTrack', dE=700, center=True, losses='TrueMuonLosses'), label='MCTCenterDeltaE700', map_name='DeltaECutMap'))
     tray.Add(counter(map_cut_module('DeltaECutMap')))
 
     # Compute energy histograms using first 600m of track
@@ -623,7 +817,7 @@ def run_tray(geo, infiles, outfile, hist_outfile, pulse_series=_pulse_series, re
     true_milli_start_energy_collections = dict()
     tray.Add(energy_histogram_module(true_milli_start_energy_collections, pulse_series=pulse_series, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=False))
     true_start_energy_collections = dict()
-    tray.Add(energy_histogram_module(true_start_energy_collections, pulse_series=pulse_series, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=False, losses='TrueMuonLosses'))
+    tray.Add(true_energy_histogram_module(true_start_energy_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=False, losses='TrueMuonTrack'))
 
     # Compute energy histograms using center 600m of track
     reco_center_energy_collections = dict()
@@ -631,7 +825,7 @@ def run_tray(geo, infiles, outfile, hist_outfile, pulse_series=_pulse_series, re
     true_milli_center_energy_collections = dict()
     tray.Add(energy_histogram_module(true_milli_center_energy_collections, pulse_series=pulse_series, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=True))
     true_center_energy_collections = dict()
-    tray.Add(energy_histogram_module(true_center_energy_collections, pulse_series=pulse_series, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=True, losses='TrueMuonLosses'))
+    tray.Add(true_energy_histogram_module(true_start_energy_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=True, losses='TrueMuonTrack'))
 
     # Compute track histograms after energy cuts
     reco_track_postcut_collections = dict()
