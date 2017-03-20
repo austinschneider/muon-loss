@@ -178,7 +178,7 @@ class muon_energy_info:
         Given energy checkpoints and losses along track.
         """
         # Get the checkpoints on either side of x, search by distance
-        cp2_i = next(itertools.dropwhile(lambda elem: elem[1][1] < x, self.valid_checkpoints), [-1])[0]
+        cp2_i = next(itertools.dropwhile(lambda elem: elem[1][1] < x, enumerate(self.valid_checkpoints)), [-1])[0]
 
         # Return muon energy before track begins, return 0 beyond track
         if cp2_i == 0:
