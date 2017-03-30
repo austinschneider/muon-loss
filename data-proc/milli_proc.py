@@ -123,21 +123,21 @@ def counter(func, const=False):
     return f
 
 class muon_energy_info:
-    def __init__(self, muon_track, muon_p, muon_losses):
+    def __init__(self, muon_track, muon_p, muon_losses, frame):
         # Create loss tuples
-        self.losses = sorted([[loss.energy, abs(loss.pos - muon_p.pos), int(loss.type)] for loss in muon_losses], key=lambda x: x[1])
+        self.losses = sorted([[loss.energy, (loss.pos - muon_p.pos)*muon_p.dir, int(loss.type)] for loss in muon_losses], key=lambda x: x[1])
 
         # Create checkpoints
         self.checkpoints = [(muon_p.energy, 0)]
 
         muon_pos_i = dataclasses.I3Position(muon_track.xi, muon_track.yi, muon_track.zi)
-        self.checkpoints.append((muon_track.Ei, abs(muon_pos_i - muon_p.pos)))
+        self.checkpoints.append((muon_track.Ei, (muon_pos_i - muon_p.pos)*muon_p.dir))
 
         muon_pos_c = dataclasses.I3Position(muon_track.xc, muon_track.yc, muon_track.zc)
-        self.checkpoints.append((muon_track.Ec, abs(muon_pos_c - muon_p.pos)))
+        self.checkpoints.append((muon_track.Ec, (muon_pos_c - muon_p.pos)*muon_p.dir))
 
         muon_pos_f = dataclasses.I3Position(muon_track.xf, muon_track.yf, muon_track.zf)
-        self.checkpoints.append((muon_track.Ef, abs(muon_pos_f - muon_p.pos)))
+        self.checkpoints.append((muon_track.Ef, (muon_pos_f - muon_p.pos)*muon_p.dir))
 
         self.checkpoints.append((0, muon_p.length))
 
@@ -168,7 +168,17 @@ class muon_energy_info:
                 total_stochastic_loss = 0
             else:
                 total_stochastic_loss = self.losses[last_index][3]
-            loss_rate = (cp1[0] - cp2[0] - total_stochastic_loss) / (cp2[1] - cp1[1])
+            try:
+                loss_rate = (cp1[0] - cp2[0] - total_stochastic_loss) / (cp2[1] - cp1[1])
+            except:
+                print self.checkpoints
+                print self.valid_checkpoints
+                print 'i: %d' % i
+                print muon_p
+                print frame['I3EventHeader']
+                print frame['I3EventHeader'].run_id
+                print frame['I3EventHeader'].event_id
+                raise
             self.loss_rates.append(loss_rate)
             self.loss_ranges.append((first_index, last_index+1))
 
@@ -187,8 +197,8 @@ class muon_energy_info:
             return 0
 
         cp1_i = cp2_i - 1
-        cp1 = self.valid_checkpoints(cp1_i)
-        cp2 = self.valid_checkpoints(cp2_i)
+        cp1 = self.valid_checkpoints[cp1_i]
+        cp2 = self.valid_checkpoints[cp2_i]
 
         if x == cp1[1]:
             return cp1[0]
@@ -204,7 +214,7 @@ class muon_energy_info:
         if losses_begin != losses_end:
             i_loss_before_x = next(itertools.dropwhile(lambda loss: loss[1][1] <= x, enumerate(self.losses[losses_begin:losses_end])), [losses_end-losses_begin])[0] - 1
             if i_loss_before_x >= 0:
-                stoch_loss_since_cp1 = self.losses[loss_begin+i_loss_before_x][3]
+                stoch_loss_since_cp1 = self.losses[losses_begin+i_loss_before_x][3]
 
         # (E at last cp) - (stoch losses since last cp) - (loss rate * distance from last cp)
         energy = cp1[0] - stoch_loss_since_cp1 - (x - cp1[1]) * loss_rate
@@ -408,15 +418,28 @@ def energy_histogram_module(collections, pulse_series, track, cut_maps=[], lengt
     return f
 
 # Compute and add energy information to a set of histogram collections
-def true_energy_histogram_module(collections, track='TrueMuonTrack', cut_maps=[], track_start_key=None, track_end_key=None, length=600, center=False, losses='TrueMuonTrack'):
+def true_energy_histogram_module(collections, track='TrueMuonTrack', cut_maps=[], track_start_key=None, track_end_key=None, length=600, center=False, losses='TrueMuonLosses'):
     if track_end_key is None:
         track_end_key = 'TrackGeoBoundsEnd'+track
     if track_start_key is None:
         track_start_key = 'TrackStart' + losses
     @phys
     def f(frame):
+        if 'MCTruthMuonTrack' not in frame.keys():
+            return False
         if track not in frame.keys() or losses not in frame.keys():
             return False
+        if track_start_key not in frame.keys() or (track_end_key not in frame.keys() and frame[track_start_key] is not None):
+            print frame['I3EventHeader']
+            print frame.keys()
+            print track
+            print frame[track]
+            print losses
+            print frame[losses]
+            print track_start_key
+            print frame[track_start_key]
+            print track_end_key
+            print frame[track_end_key]
         if frame[track_start_key] is None or frame[track_end_key] is None:
             return False
         sigs = get_cut_map_signatures(frame, cut_maps)
@@ -438,7 +461,8 @@ def true_energy_histogram_module(collections, track='TrueMuonTrack', cut_maps=[]
             for sig in sigs:
                 collections[sig][l].add(x,y,w)
                     
-        muon_p = frame[track]
+        muon_p = dataclasses.I3Particle(frame['MCTruthMuonTrack'])
+        muon_p.dir = frame[track].dir
         muon_track = [t for t in frame['MMCTrackList'] if t.particle.id == muon_p.id][0]
         muon_losses = frame[losses]
 
@@ -454,7 +478,7 @@ def true_energy_histogram_module(collections, track='TrueMuonTrack', cut_maps=[]
             start = track_start_d
         end = start + length
 
-        me_info = muon_energy_info(muon_track, muon_p, muon_losses)
+        me_info = muon_energy_info(muon_track, muon_p, muon_losses, frame)
 
         deltaE = me_info.get_energy(start) - me_info.get_energy(end)
             
@@ -511,7 +535,8 @@ def set_mc_truth_track(frame):
     true_losses = dataclasses.I3VectorI3Particle(tree.get_daughters(muon_track.particle))
 
     frame['TrueMuonLosses'] = true_losses
-    frame['TrueMuonTrack'] = muon_track.particle
+    frame['MCTruthMuonTrack'] = muon_track.particle
+    frame['TrueMuonTrack'] = dataclasses.I3Particle(muon_track.particle)
 
 # Module to shift the position and time of a track to something that looks reasonable to millipede
 def pre_milli_time_shift_module(track):
@@ -703,18 +728,21 @@ def deltaE_cut_module(pulse_series=_pulse_series, track=_reco_track, dE=500, len
         return deltaE >= dE
     return f
 
-def true_deltaE_cut_module(track='TrueMuonTrack', track_start_key=None, track_end_key=None,dE=500, length=600, center=False, losses='TrueMuonTrack'):
+def true_deltaE_cut_module(track='TrueMuonTrack', track_start_key=None, track_end_key=None,dE=500, length=600, center=False, losses='TrueMuonLosses'):
     if track_end_key is None:
         track_end_key = 'TrackGeoBoundsEnd'+track
     if track_start_key is None:
         track_start_key = 'TrackStart' + losses
     @phys
     def f(frame):
+        if 'MCTruthMuonTrack' not in frame.keys():
+            return False
         if track not in frame.keys() or losses not in frame.keys():
             return False
         if frame[track_start_key] is None or frame[track_end_key] is None:
             return False
-        muon_p = frame[track]
+        muon_p = dataclasses.I3Particle(frame['MCTruthMuonTrack'])
+        muon_p.dir = frame[track].dir
         muon_track = [t for t in frame['MMCTrackList'] if t.particle.id == muon_p.id][0]
         muon_losses = frame[losses]
 
@@ -730,7 +758,7 @@ def true_deltaE_cut_module(track='TrueMuonTrack', track_start_key=None, track_en
             start = track_start_d
         end = start + length
 
-        me_info = muon_energy_info(muon_track, muon_p, muon_losses)
+        me_info = muon_energy_info(muon_track, muon_p, muon_losses, frame)
 
         deltaE = me_info.get_energy(start) - me_info.get_energy(end)
         return deltaE >= dE
@@ -817,16 +845,30 @@ def run_tray(geo, infiles, outfile, hist_outfile, pulse_series=_pulse_series, re
     tray.Add(energy_histogram_module(reco_start_energy_collections, pulse_series=pulse_series, track=reco_track, cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=False))
     true_milli_start_energy_collections = dict()
     tray.Add(energy_histogram_module(true_milli_start_energy_collections, pulse_series=pulse_series, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=False))
-    true_start_energy_collections = dict()
-    tray.Add(true_energy_histogram_module(true_start_energy_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=False, losses='TrueMuonTrack'))
+    
+
+    reco_start_true_energy_collections = dict()
+    tray.Add(true_energy_histogram_module(reco_start_true_energy_collections, track=reco_track, cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=False, losses='TrueMuonLosses', track_start_key='TrackStart'+pulse_series+reco_track))
+    true_milli_start_true_energy_collections = dict()
+    tray.Add(true_energy_histogram_module(true_milli_start_true_energy_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=False, losses='TrueMuonLosses', track_start_key='TrackStart'+pulse_series+'TrueMuonTrack'))
+    
+    true_start_true_energy_collections = dict()
+    tray.Add(true_energy_histogram_module(true_start_true_energy_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=False, losses='TrueMuonLosses'))
 
     # Compute energy histograms using center 600m of track
     reco_center_energy_collections = dict()
     tray.Add(energy_histogram_module(reco_center_energy_collections, pulse_series=pulse_series, track=reco_track, cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=True))
     true_milli_center_energy_collections = dict()
     tray.Add(energy_histogram_module(true_milli_center_energy_collections, pulse_series=pulse_series, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=True))
-    true_center_energy_collections = dict()
-    tray.Add(true_energy_histogram_module(true_start_energy_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=True, losses='TrueMuonTrack'))
+    
+    
+    reco_center_true_energy_collections = dict()
+    tray.Add(true_energy_histogram_module(reco_center_true_energy_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=True, losses='TrueMuonLosses', track_start_key='TrackStart'+pulse_series+reco_track))
+    true_milli_center_true_energy_collections = dict()
+    tray.Add(true_energy_histogram_module(true_milli_center_true_energy_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=True, losses='TrueMuonLosses', track_start_key='TrackStart'+pulse_series+'TrueMuonTrack'))
+    
+    true_center_true_energy_collections = dict()
+    tray.Add(true_energy_histogram_module(true_center_true_energy_collections, track='TrueMuonTrack', cut_maps=['GeoLengthCutMap', 'LengthCutMap', 'DeltaECutMap'], center=True, losses='TrueMuonLosses'))
 
     # Compute track histograms after energy cuts
     reco_track_postcut_collections = dict()
@@ -852,12 +894,21 @@ def run_tray(geo, infiles, outfile, hist_outfile, pulse_series=_pulse_series, re
     output_dict = dict()
     output_dict['reco_track_collections'] = reco_track_collections
     output_dict['true_track_collections'] = true_track_collections
+
     output_dict['reco_start_energy_collections'] = reco_start_energy_collections
     output_dict['true_milli_start_energy_collections'] = true_milli_start_energy_collections
-    output_dict['true_start_energy_collections'] = true_start_energy_collections
+    
+    output_dict['reco_start_true_energy_collections'] = reco_start_true_energy_collections
+    output_dict['true_milli_start_true_energy_collections'] = true_milli_start_true_energy_collections
+    output_dict['true_start_true_energy_collections'] = true_start_true_energy_collections
+
     output_dict['reco_center_energy_collections'] = reco_center_energy_collections
-    output_dict['true_center_energy_collections'] = true_center_energy_collections
     output_dict['true_milli_center_energy_collections'] = true_milli_center_energy_collections
+    
+    output_dict['reco_center_true_energy_collections'] = reco_center_true_energy_collections
+    output_dict['true_milli_center_true_energy_collections'] = true_milli_center_true_energy_collections
+    output_dict['true_center_true_energy_collections'] = true_center_true_energy_collections
+    
     output_dict['reco_track_postcut_collections'] = reco_track_postcut_collections
     output_dict['true_track_postcut_collections'] = true_track_postcut_collections
 
