@@ -348,12 +348,15 @@ def track_histogram_module(collections, pulse_series=_pulse_series, track=_reco_
     return f
 
 # Create a collection of histograms for energy information
-def make_energy_collection():
+def make_energy_collection(length=600):
     collection = dict()
     min_E, max_E = -2, 5
     bins_per_decade = 10
     collection['deltaE'] = histogram.histogram(bins=np.logspace(min_E,max_E,(max_E-min_E)*bins_per_decade+1))
-    collection['frac_loss'] = histogram.histogram_nd(2, bins=np.linspace(0,600,600/60+1))
+    collection['frac_loss'] = histogram.histogram_nd(2, bins=np.linspace(0,length,length/60+1))
+    for i in xrange(bins):
+        collection['bin_'+str(i)+'_dE'] = histogram(bins=np.array([0]+list(np.logspace(min_E,max_E,(max_E-min_E)*bins_per_decade+1))))
+        collection['bin_'+str(i)+'_frac_loss'] = histogram(bins=np.array([0]+list(np.logspace(-7,0,7*bins_per_decade+1))))
     return collection
 
 # Compute and add energy information to a set of histogram collections
@@ -374,7 +377,7 @@ def energy_histogram_module(collections, pulse_series, track, cut_maps=[], lengt
         keys = collections.keys()
         for sig in sigs:
             if sig not in keys:
-                collections[sig] = make_energy_collection()
+                collections[sig] = make_energy_collection(length)
 
         weight = get_weight(frame)
 
@@ -414,6 +417,8 @@ def energy_histogram_module(collections, pulse_series, track, cut_maps=[], lengt
             point_dE.append(bin_dE)
             point_frac_dE.append(bin_dE / deltaE)
             point_x.append(bins[i])
+            add('bin_'+str(i)+'_dE', [bin_dE])
+            add('bin_'+str(i)+'_frac_loss', [bin_dE / deltaE])
         add('frac_loss', point_x, [point_frac_dE, point_dE], w=[weight]*len(point_frac_dE))
     return f
 
@@ -446,7 +451,7 @@ def true_energy_histogram_module(collections, track='TrueMuonTrack', cut_maps=[]
         keys = collections.keys()
         for sig in sigs:
             if sig not in keys:
-                collections[sig] = make_energy_collection()
+                collections[sig] = make_energy_collection(length)
 
         weight = get_weight(frame)
 
@@ -499,6 +504,8 @@ def true_energy_histogram_module(collections, track='TrueMuonTrack', cut_maps=[]
             point_frac_dE.append(bin_dE / deltaE)
             point_x.append(bins[i])
             e0 = e1
+            add('bin_'+str(i)+'_dE', [bin_dE])
+            add('bin_'+str(i)+'_frac_loss', [bin_dE / deltaE])
         add('frac_loss', point_x, [point_frac_dE, point_dE], w=[weight]*len(point_frac_dE))
     return f
 
