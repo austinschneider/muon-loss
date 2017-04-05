@@ -12,7 +12,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Proccess filenames')
     parser.add_argument('-i', '--infiles', metavar='infiles', type=str, default=default_infiles)
     parser.add_argument('-g', '--geo', metavar='geo', type=str, default=default_geo)
-    parser.add_argument('-o', '--outdir', default='')
+    parser.add_argument('-o', '--outdir', default='./')
     parser.add_argument('-f', '--histogram-file', dest='hist_file', default='./histogram_output')
 
     parser.add_argument('-r', '--range', default='')
@@ -352,11 +352,12 @@ def make_energy_collection(length=600):
     collection = dict()
     min_E, max_E = -2, 5
     bins_per_decade = 10
+    frac_loss_bins = length / 60
     collection['deltaE'] = histogram.histogram(bins=np.logspace(min_E,max_E,(max_E-min_E)*bins_per_decade+1))
-    collection['frac_loss'] = histogram.histogram_nd(2, bins=np.linspace(0,length,length/60+1))
-    for i in xrange(bins):
-        collection['bin_'+str(i)+'_dE'] = histogram(bins=np.array([0]+list(np.logspace(min_E,max_E,(max_E-min_E)*bins_per_decade+1))))
-        collection['bin_'+str(i)+'_frac_loss'] = histogram(bins=np.array([0]+list(np.logspace(-7,0,7*bins_per_decade+1))))
+    collection['frac_loss'] = histogram.histogram_nd(2, bins=np.linspace(0,length,frac_loss_bins+1))
+    for i in xrange(frac_loss_bins):
+        collection['bin_'+str(i)+'_dE'] = histogram.histogram(bins=np.array([0]+list(np.logspace(min_E,max_E,(max_E-min_E)*bins_per_decade+1))))
+        collection['bin_'+str(i)+'_frac_loss'] = histogram.histogram(bins=np.array([0]+list(np.logspace(-7,0,7*bins_per_decade+1))))
     return collection
 
 # Compute and add energy information to a set of histogram collections
